@@ -204,6 +204,16 @@ test('REDACTED：错误文本中嵌 secret 值形状被掩码，且保留非敏�
   assert.ok(e.includes('过期')); // 无损掩码保留上下文
 });
 
+test('REDACTED：日期戳备份文件名不误伤（高熵掩码豁免），随机 token 仍掩码', () => {
+  // 日期戳文件名：dsh-config-2026-09-03-6dec8c 恰为 28 字符 [a-z0-9-] 串，
+  // 曾被 HIGH_ENTROPY 误判打码 → 现按日期形态豁免（备份文件列表本就明文展示）
+  const summary = redactHistoryText('定时备份完成：dsh-config-2026-09-03-6dec8c.zip');
+  assert.ok(summary.includes('dsh-config-2026-09-03-6dec8c.zip'), '文件名保留可读');
+  // 无日期形态的随机长 token 仍被掩码
+  const secret = 'a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f6';
+  assert.ok(!redactHistoryText(`连接失败：${secret}`).includes(secret), '随机 token 仍掩码');
+});
+
 test('REDACTED：sanitizeEntry 校验 source 合法枚举，非法回退 internal', () => {
   const entry = sanitizeEntry(makeRaw({ source: 'evil-input' as never }));
   assert.equal(entry.source, 'internal');

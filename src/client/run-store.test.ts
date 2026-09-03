@@ -879,7 +879,7 @@ test('低频面板: 旧版 v1 载荷（无 panel/sync/market/snapshots 字段）
   const store = new RunStore({ storage })
   const st = store.getSnapshot()
   assert.equal(st.view, 'import')
-  assert.equal(st.panel, 'overview', '旧载荷无 panel（旧「主视图」缺省）→ 迁移为总览页（2026-09 新默认页）')
+  assert.equal(st.panel, 'import', '旧载荷无 panel（旧「主视图」缺省）→ 由 view 映射到具体页面（Workbench Rebuild）')
   assert.equal(st.sync.channel, 'git')
   assert.equal(st.sync.byChannel.git.syncSections.length, 0)
   assert.equal(st.sync.byChannel.webdav.syncMode, 'default', 'webdav 通道缺省')
@@ -937,36 +937,36 @@ test('聚合优化: 旧 panel "recovery" → 迁移为 snapshots + subTab=recove
   assert.equal(st.snapshots.subTab, 'recovery', '旧 recovery tab → snapshots 恢复子 tab')
 })
 
-test('聚合优化: 旧 panel "about"/"history" → 迁移为 more + 对应 moreSub；新 more 载荷往返', () => {
+test('Workbench Rebuild: 旧 panel "about"/"history"/"more" → 迁移为 overview；moreSub 保留；新载荷往返', () => {
   const { storage } = makeStorage()
-  // 旧 about → more + moreSub=about
+  // 旧 about → overview + moreSub=about
   storage.setItem(STATE_KEY, JSON.stringify({
     v: 1, view: 'export', panel: 'about',
     export: { mode: 'quick', selection: [], includeSecrets: false, encrypt: false, fileName: '', note: '', error: null },
     import: { step: 'select', selectedFileName: null, containerEncrypted: false, error: null },
   }))
   const about = new RunStore({ storage })
-  assert.equal(about.getSnapshot().panel, 'more', '旧 about tab → 更多')
+  assert.equal(about.getSnapshot().panel, 'overview', '旧 about tab → 总览（更多已由抽屉/弹窗取代）')
   assert.equal(about.getSnapshot().more.moreSub, 'about', '旧 about tab → moreSub=about')
 
-  // 旧 history → more + moreSub=history
+  // 旧 history → overview + moreSub=history
   storage.setItem(STATE_KEY, JSON.stringify({
     v: 1, view: 'export', panel: 'history',
     export: { mode: 'quick', selection: [], includeSecrets: false, encrypt: false, fileName: '', note: '', error: null },
     import: { step: 'select', selectedFileName: null, containerEncrypted: false, error: null },
   }))
   const history = new RunStore({ storage })
-  assert.equal(history.getSnapshot().panel, 'more', '旧 history tab → 更多')
+  assert.equal(history.getSnapshot().panel, 'overview', '旧 history tab → 总览')
   assert.equal(history.getSnapshot().more.moreSub, 'history', '旧 history tab → moreSub=history')
 
-  // 新「更多」载荷往返（panel=more + moreSub=history 持久化 + 刷新恢复）
+  // 旧「更多」载荷往返（panel=more 迁移为 overview；moreSub 持久化保留 + 刷新恢复）
   storage.setItem(STATE_KEY, JSON.stringify({
     v: 1, view: 'export', panel: 'more', more: { moreSub: 'history' },
     export: { mode: 'quick', selection: [], includeSecrets: false, encrypt: false, fileName: '', note: '', error: null },
     import: { step: 'select', selectedFileName: null, containerEncrypted: false, error: null },
   }))
   const more = new RunStore({ storage })
-  assert.equal(more.getSnapshot().panel, 'more')
+  assert.equal(more.getSnapshot().panel, 'overview')
   assert.equal(more.getSnapshot().more.moreSub, 'history', '新 more 载荷刷新恢复 moreSub')
 
   // 运行时 patch: 切换 moreSub (about <-> history)

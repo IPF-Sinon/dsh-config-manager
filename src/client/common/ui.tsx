@@ -1,16 +1,27 @@
 /**
- * Config Manager 基础 UI 原语（dsh-ssh 风格，全部走 DSH Design System 的 --dsw-* token，
- * 不另造视觉体系）。仅作薄封装：类名来自 config-manager.module.css，无业务逻辑。
+ * Config Manager 基础 UI 原语 —— Workbench Design System（2026-09 Full UI Rebuild）。
+ * 全部走 DSH Design System 的 --dsw-* token，不另造视觉体系；类名来自
+ * config-manager.module.css，无业务逻辑。
+ *
+ * 本文件是重建后的原语层：在既有 API（Button/Badge/Banner/Card/Spinner/Field/
+ * SectionTitle/Empty/Checkbox/Stepper）完全兼容的前提下，新增：
+ *   - Button size（'sm' 密集场景）
+ *   - IconButton（导航/工具栏图标动作）
+ *   - StatusDot（状态栏/行内状态点）
+ *   - Segmented（页内子视图分段切换）
  */
-import type { ChangeEvent, ReactNode } from 'react'
+import type { ChangeEvent, CSSProperties, ReactNode } from 'react'
 import css from '../config-manager.module.css'
 
 /* ---------------- Button ---------------- */
 
 export type ButtonVariant = 'primary' | 'ghost' | 'danger'
+export type ButtonSize = 'sm' | 'md'
 
 export interface ButtonProps {
   variant?: ButtonVariant
+  /** 尺寸：sm = 表格行内/密集工具栏（24px）；md = 常规（28px，缺省） */
+  size?: ButtonSize
   disabled?: boolean
   /** 进行中态：自动 disabled + aria-busy（children 由调用方渲染 Spinner 保持现状） */
   loading?: boolean
@@ -26,17 +37,15 @@ export interface ButtonProps {
 
 /**
  * 统一按钮（primary=主操作 / ghost=次操作 / danger=危险操作）。
- * 带 href 时渲染同款按钮类的外链 <a>（target=_blank + rel=noreferrer），
- * 外观与普通按钮一致，不破坏既有 <button> 调用。
- * loading=true 时自动禁用（防重复点击）并标注 aria-busy（无障碍）；
- * 视觉 loading（Spinner）由调用方按既有模式放在 children 中。
+ * 带 href 时渲染同款按钮类的外链 <a>；loading=true 时自动禁用并标注 aria-busy。
  */
-export function Button({ variant = 'ghost', disabled, loading = false, onClick, children, title, className, href, newTab = true }: ButtonProps) {
+export function Button({ variant = 'ghost', size, disabled, loading = false, onClick, children, title, className, href, newTab = true }: ButtonProps) {
   const cls =
     variant === 'primary' ? css.primaryButton
       : variant === 'danger' ? css.dangerButton
         : css.ghostButton
   const effectiveDisabled = disabled === true || loading
+  const sizeProps = size === 'sm' ? { 'data-size': 'sm' as const } : {}
   if (href !== undefined) {
     return (
       <a
@@ -47,8 +56,9 @@ export function Button({ variant = 'ghost', disabled, loading = false, onClick, 
         title={title}
         aria-busy={loading || undefined}
         onClick={onClick}
-        // 按钮类无 text-decoration 规则，<a> 默认下划线破坏按钮外观（SyncSettingsView 外链同款极小修补）
+        // 按钮类无 text-decoration 规则，<a> 默认下划线破坏按钮外观
         style={{ textDecoration: 'none' }}
+        {...sizeProps}
       >
         {children}
       </a>
@@ -62,9 +72,66 @@ export function Button({ variant = 'ghost', disabled, loading = false, onClick, 
       title={title}
       aria-busy={loading || undefined}
       onClick={onClick}
+      {...sizeProps}
     >
       {children}
     </button>
+  )
+}
+
+/* ---------------- IconButton ---------------- */
+
+export interface IconButtonProps {
+  /** 图标/符号（文本符号；aria-label 必填描述用途） */
+  icon: ReactNode
+  /** 无障碍名称（必填：图标按钮没有可见文本） */
+  label: string
+  onClick?: () => void
+  disabled?: boolean
+  /** 高亮态（如抽屉打开时对应按钮 active） */
+  active?: boolean
+  /** 危险语义（红色；用于行内删除等破坏性动作的视觉隔离） */
+  danger?: boolean
+  title?: string
+}
+
+/** 图标按钮（导航条/工具栏图标动作；26px 触达区）。 */
+export function IconButton({ icon, label, onClick, disabled, active, danger, title }: IconButtonProps) {
+  return (
+    <button
+      type="button"
+      className={css.iconBtn}
+      aria-label={label}
+      title={title ?? label}
+      data-active={active === true ? '' : undefined}
+      data-danger={danger === true ? '' : undefined}
+      disabled={disabled === true}
+      onClick={onClick}
+    >
+      {icon}
+    </button>
+  )
+}
+
+/* ---------------- StatusDot ---------------- */
+
+export type StatusDotKind = 'idle' | 'ok' | 'info' | 'warn' | 'error'
+
+export interface StatusDotProps {
+  kind?: StatusDotKind
+  /** 进行中脉冲动画 */
+  pulse?: boolean
+}
+
+/** 状态点（状态栏/行内状态指示）。 */
+export function StatusDot({ kind = 'idle', pulse }: StatusDotProps) {
+  return (
+    <span
+      className={css.statusDot}
+      data-kind={kind === 'idle' ? undefined : kind}
+      data-pulse={pulse === true ? '' : undefined}
+      aria-hidden="true"
+    />
   )
 }
 
@@ -75,11 +142,11 @@ export type BadgeKind = 'info' | 'ok' | 'warn' | 'error'
 export interface BadgeProps {
   kind?: BadgeKind
   children: ReactNode
-  /** 悬停提示（可选；如 star 徽章的「仓库级 star」说明） */
+  /** 悬停提示（可选） */
   title?: string
 }
 
-/** 状态徽章（info=业务色 / ok=成功 / warn=警告 / error=错误） */
+/** 状态徽章（info=业务色 / ok=成功 / warn=警告 / error=错误）。 */
 export function Badge({ kind = 'info', children, title }: BadgeProps) {
   return <span className={`${css.badge} ${css[`badge${kind[0]!.toUpperCase()}${kind.slice(1)}`] ?? ''}`} title={title}>{children}</span>
 }
@@ -103,11 +170,13 @@ export function Banner({ kind = 'info', children }: BannerProps) {
 export interface CardProps {
   children: ReactNode
   className?: string
+  /** 少量布局微调（flex 填充等）；常规布局仍走 CSS 类 */
+  style?: CSSProperties
 }
 
-/** 卡片容器（bg-layer-2 + 圆角 + 细边框） */
-export function Card({ children, className }: CardProps) {
-  return <div className={className !== undefined ? `${css.card} ${className}` : css.card}>{children}</div>
+/** 卡片容器（bg-layer-2 + 细边框） */
+export function Card({ children, className, style }: CardProps) {
+  return <div className={className !== undefined ? `${css.card} ${className}` : css.card} style={style}>{children}</div>
 }
 
 /* ---------------- Spinner ---------------- */
@@ -197,6 +266,44 @@ export function Checkbox({ checked, onChange, label, disabled }: CheckboxProps) 
   )
 }
 
+/* ---------------- Segmented ---------------- */
+
+export interface SegmentedItem {
+  id: string
+  label: string
+  /** 计数徽标（可选；如市场分区筛选计数） */
+  count?: number
+}
+
+export interface SegmentedProps {
+  items: SegmentedItem[]
+  active: string
+  onChange: (id: string) => void
+  ariaLabel?: string
+}
+
+/** 分段控件（页内子视图切换；受控）。 */
+export function Segmented({ items, active, onChange, ariaLabel }: SegmentedProps) {
+  return (
+    <div className={css.segGroup} role="tablist" aria-label={ariaLabel}>
+      {items.map((item) => (
+        <button
+          key={item.id}
+          type="button"
+          role="tab"
+          aria-selected={item.id === active}
+          data-active={item.id === active ? '' : undefined}
+          className={css.segItem}
+          onClick={() => { onChange(item.id) }}
+        >
+          {item.label}
+          {item.count !== undefined && <span aria-hidden="true">·{item.count}</span>}
+        </button>
+      ))}
+    </div>
+  )
+}
+
 /* ---------------- Stepper ---------------- */
 
 export type StepperStepState = 'done' | 'current' | 'todo'
@@ -215,9 +322,8 @@ export interface StepperProps {
 }
 
 /**
- * 向导步骤条（只读指示器，非导航）：圆点（序号/✓）+ 连接线 + 标签。
- * state 由调用方的纯函数模型给出（如 import-stepper.ts）；组件不做任何状态推断。
- * current 圆点为 business 填充、done 为 success 淡底 ✓、todo 为中性描边序号。
+ * 向导步骤条（只读指示器，非导航）：紧凑圆点（序号/✓）+ 连接线 + 标签。
+ * state 由调用方的纯函数模型给出；组件不做任何状态推断。
  */
 export function Stepper({ steps, ariaLabel }: StepperProps) {
   return (

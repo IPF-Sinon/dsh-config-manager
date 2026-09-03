@@ -1,18 +1,19 @@
 /**
- * 快照恢复面板（M4）：列出快照 → 选择 → dry-run 计划预览 → 确认执行 → 诚实报告。
+ * 备份页（Backups —— Workbench Rebuild 2026-09）：快照 / 备份文件 / 恢复 三子视图。
+ *
+ * 视觉重建说明：全部渲染模型与状态逻辑保持不变（dry-run 计划代数守卫、store 镜像
+ * commit/patch、宿主 RunRegistry 权威防重、refreshTick 重载、inspect 只读弹窗）；
+ * 展示层升级为 Workbench 数据表 + 工具栏（数据表行可选中、操作收进行内 sm 按钮、
+ * 子视图切换走 Segmented 分段控件）。
  *
  * 数据流：api.snapshots() 加载列表；选择快照后 api.restoreSnapshot(id, true) 拿
  * 恢复计划（零写入预览）；确认后 api.restoreSnapshot(id, false) 执行并展示报告
  * （restored / removedPlugins / manualHints（人工项高亮）/ failed / skipped）。
  * 状态组件内自持（useState），同时经 toSnapshotsStoreSlice() 镜像进模块级 runStore：
- * 模块级单例保证「切 tab 不丢」，sessionStorage 白名单保证「刷新恢复」
- * （选中快照 / dry-run 计划 / 执行报告；快照列表本身可随时重载，不持久化）。
+ * 模块级单例保证「切页不丢」，sessionStorage 白名单保证「刷新恢复」。
  *
- * 视图底部附「定时全量备份」设置卡（BackupScheduleCard，m-backup-schedule）：
- * 开关 + 间隔档位（6h/12h/24h/7d）保存经 PUT /backup-schedule（host 校验 + 重排
- * 调度器）；「立即备份」经 POST /backup-schedule/run 复用 BackupScheduler.runOnce
- * （同一时刻防重）。草稿镜像 runStore.snapshots.backupDraft（未保存修改切 tab /
- * 刷新保留）。安全：定时备份恒不含 secret、不加密；本卡无敏感字段。
+ * 安全：恢复/删除为危险操作，恒走 danger + ConfirmDialog 二次确认；报告文本经
+ * 上游 redact 链路。
  */
 import { useEffect, useRef, useState } from 'react'
 import type { ChangeEvent, ReactNode } from 'react'
@@ -23,7 +24,7 @@ import type { ConfigManagerApi } from '../api.ts'
 import type { TranslateNS } from '../client-types.ts'
 import type { RecoveryPort } from '../../ui/types.ts'
 import { RecoveryPanel } from '../recovery/RecoveryPanel.tsx'
-import { Badge, Banner, Button, Card, Checkbox, Empty, Field, SectionTitle, Spinner } from '../common/ui.tsx'
+import { Badge, Banner, Button, Card, Checkbox, Empty, IconButton, Segmented, Spinner } from '../common/ui.tsx'
 import { ConfirmDialog } from '../common/ConfirmDialog.tsx'
 import { runStore, toSnapshotsStoreSlice, type SnapshotsStoreSlice, type SnapshotsSubTab } from '../run-store.ts'
 import type { BackupFileMeta } from '../../sync/backup-files.ts'
@@ -48,7 +49,7 @@ import css from '../config-manager.module.css'
 export interface SnapshotsPanelProps {
   api: ConfigManagerApi
   t: TranslateNS<'config-manager'>
-  /** 聚合优化：恢复（Phase 5）并入「备份与快照」作第三子 tab，透传给 RecoveryPanel */
+  /** 恢复（Phase 5）子视图，透传给 RecoveryPanel */
   recoveryApi: RecoveryPort
   recoveryT: TranslateNS<'config-manager-recovery'>
 }
@@ -73,6 +74,15 @@ interface SnapshotDeleteTarget {
 
 /** 快照保留上限（与 core backup.ts SNAPSHOT_RETENTION_LIMIT 对齐；展示用提示文案） */
 export const SNAPSHOT_RETENTION_LIMIT = 10
+
+/** 中段省略（文件名：保留头尾，中段 …——尾部时间戳是唯一区分信息，不可被截掉）。 */
+function midEllipsis(s: string, max = 26): string {
+  if (s.length <= max) return s
+  const keep = max - 1
+  const head = Math.ceil(keep / 2)
+  const tail = keep - head
+  return `${s.slice(0, head)}…${s.slice(-tail)}`
+}
 
 const initial: PanelState = {
   status: 'loading',
@@ -119,10 +129,9 @@ function actionKindLabel(t: TranslateNS<'config-manager'>, kind: string): string
 }
 
 /**
- * 从 runStore 恢复上次的快照面板状态（切 tab 回 / 刷新后挂载）。
+ * 从 runStore 恢复上次的快照面板状态（切页回 / 刷新后挂载）。
  * 无敏感字段；plan/report 为纯数据，可安全序列化恢复。
- * running 来自 store 镜像（刷新后经 runStore.resume() 以宿主 /runs 为权威重新置位——
- * 持久化白名单恒为 false，绝不把浏览器陈旧状态当成恢复执行中的依据）。
+ * running 来自 store 镜像（刷新后经 runStore.resume() 以宿主 /runs 为权威重新置位）。
  */
 function initFromStore(): PanelState {
   const s: SnapshotsStoreSlice = runStore.getSnapshot().snapshots
@@ -145,21 +154,20 @@ export function SnapshotsPanel({ api, t, recoveryApi, recoveryT }: SnapshotsPane
   const mountedRef = useRef(true)
   /** dry-run 计划请求代数：快速切换快照时作废在途旧请求（防晚到响应覆盖新选择） */
   const planGeneration = useRef(0)
-  /** 执行恢复的二次确认弹窗开关（危险操作，DESIGN.md §8.11 场景） */
+  /** 执行恢复的二次确认弹窗开关（危险操作） */
   const [confirmOpen, setConfirmOpen] = useState(false)
   /** P1-⑧：手动删除快照确认目标（null = 无） */
   const [deleteTarget, setDeleteTarget] = useState<SnapshotDeleteTarget | null>(null)
   /** P1-⑧：删除/置顶请求进行中（防重复提交） */
   const [managing, setManaging] = useState(false)
-  /** 恢复计划预览弹窗开关（瞬态 UI，不持久化：弹窗即会话，关闭即放弃展示；
-   *  plan 仍镜像 runStore，切 tab/刷新恢复后可再次打开） */
+  /** 恢复计划预览弹窗开关（瞬态 UI；plan 仍镜像 runStore，切页/刷新恢复后可再次打开） */
   const [planOpen, setPlanOpen] = useState(false)
   /** Phase 7 迁移前咨询：恢复计划弹窗内的咨询报告（本地 state，非敏感） */
   const [consultReport, setConsultReport] = useState<ConsultReport | null>(null)
   const [consultLoading, setConsultLoading] = useState(false)
   /** 备份文件列表刷新信号：BackupScheduleCard「立即备份」完成后递增触发重载 */
   const [backupFilesTick, setBackupFilesTick] = useState(0)
-  /** 二级 tab（备份文件 / 快照恢复）：初始从 store 恢复，切换镜像 runStore（切一级 tab/刷新不丢） */
+  /** 二级子视图（快照 / 备份文件 / 恢复）：初始从 store 恢复，切换镜像 runStore */
   const [subTab, setSubTab] = useState<SnapshotsSubTab>(() => runStore.getSnapshot().snapshots.subTab ?? 'restore')
   const switchSubTab = (next: SnapshotsSubTab): void => {
     setSubTab(next)
@@ -169,8 +177,7 @@ export function SnapshotsPanel({ api, t, recoveryApi, recoveryT }: SnapshotsPane
   /**
    * 统一提交入口：更新 stateRef → 挂载时 setState → **总是**镜像进 runStore。
    * 关键：镜像不依赖 effect flush —— 异步操作（dry-run 计划/执行恢复）完成回调
-   * 在组件已卸载（切走 tab）时也能把结果（plan/report）写进 store，切回恢复。
-   * backupDraft 由 BackupScheduleCard 独立管理，此处从 store 读回原值避免覆盖。
+   * 在组件已卸载（切走页面）时也能把结果（plan/report）写进 store，切回恢复。
    */
   const commit = (next: PanelState): void => {
     stateRef.current = next
@@ -181,7 +188,7 @@ export function SnapshotsPanel({ api, t, recoveryApi, recoveryT }: SnapshotsPane
   }
   const patch = (p: Partial<PanelState>): void => commit({ ...stateRef.current, ...p })
 
-  /** 卸载时置挂载守卫 + 最后镜像一次（防止「最后一次改动后立即切 tab」时丢状态）。 */
+  /** 卸载时置挂载守卫 + 最后镜像一次（防止「最后一次改动后立即切页」时丢状态）。 */
   useEffect(() => () => {
     mountedRef.current = false
     const store = runStore.getSnapshot().snapshots
@@ -203,8 +210,7 @@ export function SnapshotsPanel({ api, t, recoveryApi, recoveryT }: SnapshotsPane
 
   useEffect(load, [api])
 
-  /** Phase 7 迁移前咨询：恢复计划弹窗打开时对选中快照生成咨询报告（只读，零写入）。
-   *  失败静默（咨询是建议性，不阻断恢复）。 */
+  /** Phase 7 迁移前咨询：恢复计划弹窗打开时对选中快照生成咨询报告（只读，零写入）。 */
   useEffect(() => {
     if (!planOpen || state.selectedId === null) return
     let cancelled = false
@@ -218,7 +224,6 @@ export function SnapshotsPanel({ api, t, recoveryApi, recoveryT }: SnapshotsPane
 
   const select = (id: string): void => {
     // 每次选择递增代数：用户快速切换快照时，旧 dry-run 请求晚到直接丢弃
-    // （防止「选了 B 却显示 A 的计划」的状态串扰）。
     const generation = planGeneration.current + 1
     planGeneration.current = generation
     // 点击同一快照且计划已就绪：直接打开预览弹窗，不重复请求
@@ -227,8 +232,7 @@ export function SnapshotsPanel({ api, t, recoveryApi, recoveryT }: SnapshotsPane
       return
     }
     patch({ selectedId: id, plan: null, report: null, actionError: null, planning: true })
-    // 计划预览在弹窗内展示（与备份文件「查看/对比」一致）：点击行即打开弹窗，
-    // loading/结果/错误都在弹窗内呈现
+    // 计划预览在弹窗内展示：点击行即打开弹窗，loading/结果/错误都在弹窗内呈现
     setPlanOpen(true)
     api.restoreSnapshot(id, true).then(
       (res) => {
@@ -249,9 +253,8 @@ export function SnapshotsPanel({ api, t, recoveryApi, recoveryT }: SnapshotsPane
     if (state.selectedId === null || state.running) return
     patch({ running: true, report: null, actionError: null })
     setConfirmOpen(false)
-    // m3/P1-1：宿主侧权威防重（/restore 经 RunRegistry 登记，同 kind running → 409）；
-    // 前端 running 只是 UX 镜像。watchRunning 轮询宿主 /runs + /progress——
-    // 切 tab（卸载）后轮询继续，完成/失败经 applySettled 写入 store，切回 initFromStore 恢复。
+    // 宿主侧权威防重（/restore 经 RunRegistry 登记，同 kind running → 409）；
+    // 前端 running 只是 UX 镜像。watchRunning 轮询宿主 /runs + /progress。
     runStore.watchRunning('restore', 500)
     api.restoreSnapshot(state.selectedId, false).then(
       (res) => { patch({ running: false, report: res.report ?? null }) },
@@ -327,60 +330,57 @@ export function SnapshotsPanel({ api, t, recoveryApi, recoveryT }: SnapshotsPane
   const reportLine = (title: string, items: string[], warn: boolean): ReactNode => {
     if (items.length === 0) return null
     return (
-      <Card className={css.card}>
-        <strong className={warn ? css.warnText : undefined}>{title}（{items.length}）</strong>
+      <div className={css.inspectGroup}>
+        <div className={css.groupHeader}>
+          <strong className={warn ? css.warnText : undefined}>{title}（{items.length}）</strong>
+        </div>
         <div className={css.reportScroll}>
           <ul className={css.reportList}>
             {items.map((item, i) => <li key={`${title}-${i}`}>{item}</li>)}
           </ul>
         </div>
-      </Card>
+      </div>
     )
   }
 
   return (
     <div className={css.viewBody}>
-      <SectionTitle title={t('snapshots.title')} subtitle={t('snapshots.hint')} />
-
-      {/* 二级 tab（备份文件 / 快照恢复 / 恢复；subTab 镜像 runStore——切一级 tab/刷新不丢，与市场面板 modeTabs 同模式） */}
-      <div className={css.modeTabs} role="tablist">
-        <button
-          type="button"
-          role="tab"
-          aria-selected={subTab === 'restore'}
-          data-active={subTab === 'restore' ? '' : undefined}
-          className={css.modeTab}
-          onClick={() => { switchSubTab('restore') }}
-        >
-          {t('snapshots.subTab.restore')}
-        </button>
-        <button
-          type="button"
-          role="tab"
-          aria-selected={subTab === 'files'}
-          data-active={subTab === 'files' ? '' : undefined}
-          className={css.modeTab}
-          onClick={() => { switchSubTab('files') }}
-        >
-          {t('snapshots.subTab.files')}
-        </button>
-        <button
-          type="button"
-          role="tab"
-          aria-selected={subTab === 'recovery'}
-          data-active={subTab === 'recovery' ? '' : undefined}
-          className={css.modeTab}
-          onClick={() => { switchSubTab('recovery') }}
-        >
-          {t('snapshots.subTab.recovery')}
-        </button>
+      {/* 二级子视图切换（Segmented 分段控件 + 刷新；subTab 镜像 runStore） */}
+      <div className={css.actionRow}>
+        <Segmented
+          items={[
+            { id: 'restore', label: t('snapshots.subTab.restore') },
+            { id: 'files', label: t('snapshots.subTab.files') },
+            { id: 'schedule', label: t('snapshots.subTab.schedule') },
+            { id: 'recovery', label: t('snapshots.subTab.recovery') },
+          ]}
+          active={subTab}
+          onChange={(id) => { switchSubTab(id as SnapshotsSubTab) }}
+          ariaLabel={t('snapshots.title')}
+        />
+        <span className={css.statusSpacer} />
+        <IconButton
+          icon="⟳"
+          label={t('overview.refresh')}
+          onClick={() => {
+            load()
+            setBackupFilesTick((n) => n + 1)
+          }}
+        />
       </div>
 
       {subTab === 'recovery' ? (
-        /* 聚合优化：恢复（Phase 5）并入「备份与快照」作第三子 tab。
-           完全复用 RecoveryPanel（自身独立切片 + 确认/执行/验证流程），不做任何改动 */
+        /* 事故恢复（Phase 5）：完全复用 RecoveryPanel（自身独立切片 + 确认/执行/验证流程） */
         <RecoveryPanel recoveryApi={recoveryApi} t={recoveryT} />
-      ) : subTab === 'restore' ? (
+      ) : subTab === 'files' ? (
+        <BackupFilesCard api={api} t={t} refreshTick={backupFilesTick} />
+      ) : subTab === 'schedule' ? (
+        <BackupScheduleCard
+          api={api}
+          t={t}
+          onBackupDone={() => { setBackupFilesTick((n) => n + 1) }}
+        />
+      ) : (
         <>
           {/* —— 快照恢复：导入前回滚点列表 → 选择 → dry-run 计划 → 执行 → 报告 —— */}
 
@@ -394,58 +394,93 @@ export function SnapshotsPanel({ api, t, recoveryApi, recoveryT }: SnapshotsPane
           )}
 
           {state.status === 'ready' && state.metas.length === 0 && (
-            <Empty>{t('snapshots.empty')}</Empty>
+            /* 空态页：垂直居中 + 图形 + 双 CTA（立即备份 / 查看备份文件） */
+            <div className={css.emptyHero}>
+              <span className={css.emptyHeroSymbol} aria-hidden="true">▣</span>
+              <span className={css.emptyHeroTitle}>{t('snapshots.empty.title')}</span>
+              <span className={css.emptyHeroBody}>{t('snapshots.empty.body')}</span>
+              <div className={css.toolRow} style={{ justifyContent: 'center', marginBottom: 0 }}>
+                <Button size="sm" onClick={() => { switchSubTab('files') }}>{t('snapshots.empty.viewFiles')}</Button>
+                <Button size="sm" variant="primary" onClick={() => {
+                  api.runBackupNow().then(() => { setBackupFilesTick((n) => n + 1) }, () => {})
+                }}>
+                  {t('snapshots.empty.runBackup')}
+                </Button>
+              </div>
+            </div>
           )}
 
           {state.status === 'ready' && state.metas.length > 0 && (
             <>
-              {/* P1-⑧：保留策略可见（最多保留 N 个 + 置顶豁免说明） */}
-              <div className={css.hint}>{t('snapshots.retentionHint', { count: String(SNAPSHOT_RETENTION_LIMIT) })}</div>
-              <div className={css.snapshotList} role="listbox" aria-label={t('snapshots.selectHint')}>
-                <div className={css.snapshotRowHeader}>
-                  <span>{t('snapshots.createdAt')}</span>
-                  <span>{t('snapshots.sourceZip')}</span>
-                  <span>{t('snapshots.status')}</span>
-                  <span>{t('snapshots.entries')}</span>
-                  <span>{t('snapshots.plugins')}</span>
-                  <span>{t('snapshots.actions')}</span>
+              <div className={css.hint} style={{ marginBottom: 8 }}>
+                {t('snapshots.retentionHint', { count: String(SNAPSHOT_RETENTION_LIMIT) })}
+              </div>
+              <div className={css.tableWrap}>
+                <div className={css.tableScroll}>
+                  <table className={`${css.dataTable} ${css.tableFixed}`}>
+                    <thead>
+                      <tr>
+                        <th style={{ width: 118 }}>{t('snapshots.createdAt')}</th>
+                        <th>{t('snapshots.sourceZip')}</th>
+                        <th style={{ width: 68 }}>{t('snapshots.status')}</th>
+                        <th className={css.num} style={{ width: 46 }}>{t('snapshots.entries')}</th>
+                        <th className={css.num} style={{ width: 46 }}>{t('snapshots.plugins')}</th>
+                        <th className={css.cellActions} style={{ width: 104 }}>{t('snapshots.actions')}</th>
+                      </tr>
+                    </thead>
+                    <tbody role="listbox" aria-label={t('snapshots.selectHint')}>
+                      {state.metas.map((meta) => {
+                        const selected = meta.id === state.selectedId
+                        return (
+                          <tr
+                            key={meta.id}
+                            role="option"
+                            aria-selected={selected}
+                            data-selected={selected ? '' : undefined}
+                            style={{ cursor: 'pointer' }}
+                            tabIndex={0}
+                            onClick={() => { select(meta.id) }}
+                            onKeyDown={(e) => {
+                              if (e.key === 'Enter' || e.key === ' ') {
+                                e.preventDefault()
+                                select(meta.id)
+                              }
+                            }}
+                          >
+                            <td>
+                              <span title={meta.id}>
+                                {meta.pinned === true && '📌 '}{new Date(meta.createdAt).toLocaleString()}
+                              </span>
+                            </td>
+                            <td className={css.dim}>
+                              <span className={css.mono} title={meta.sourceZip} style={{ fontSize: '11px' }}>{meta.sourceZip}</span>
+                            </td>
+                            <td><Badge kind={statusBadgeKind(meta.status)}>{statusLabel(t, meta.status)}</Badge></td>
+                            <td className={css.num}>{meta.entryCount}</td>
+                            <td className={css.num}>{meta.beforePluginCount}</td>
+                            <td className={css.cellActions}>
+                              <span className={css.rowActions}>
+                                <Button size="sm" disabled={managing} onClick={() => { togglePin(meta) }}>
+                                  {meta.pinned === true ? t('snapshots.unpin') : t('snapshots.pin')}
+                                </Button>
+                                <Button size="sm" variant="danger" disabled={managing} onClick={() => { setDeleteTarget({ id: meta.id, createdAt: meta.createdAt }) }}>
+                                  {t('snapshots.delete')}
+                                </Button>
+                              </span>
+                            </td>
+                          </tr>
+                        )
+                      })}
+                    </tbody>
+                  </table>
                 </div>
-                {state.metas.map((meta) => {
-                  const selected = meta.id === state.selectedId
-                  return (
-                    <div key={meta.id} className={css.snapshotRow} role="option" aria-selected={selected} data-active={selected ? '' : undefined}>
-                      <button
-                        type="button"
-                        className={css.snapshotRowMain}
-                        disabled={state.planning || state.running}
-                        onClick={() => { select(meta.id) }}
-                      >
-                        <span title={meta.id}>
-                          {meta.pinned === true && '📌 '}{new Date(meta.createdAt).toLocaleString()}
-                        </span>
-                        <span title={meta.sourceZip}>{meta.sourceZip}</span>
-                        <span><Badge kind={statusBadgeKind(meta.status)}>{statusLabel(t, meta.status)}</Badge></span>
-                        <span>{meta.entryCount}</span>
-                        <span>{meta.beforePluginCount}</span>
-                      </button>
-                      <span className={css.actionRow}>
-                        <Button disabled={managing} onClick={() => { togglePin(meta) }}>
-                          {meta.pinned === true ? t('snapshots.unpin') : t('snapshots.pin')}
-                        </Button>
-                        <Button variant="danger" disabled={managing} onClick={() => { setDeleteTarget({ id: meta.id, createdAt: meta.createdAt }) }}>
-                          {t('snapshots.delete')}
-                        </Button>
-                      </span>
-                    </div>
-                  )
-                })}
               </div>
 
               {state.selectedId !== null && (
                 <>
                   {state.planning && !planOpen && <Spinner label={t('common.loading')} />}
                   {state.plan !== null && !planOpen && (
-                    // 计划已就绪但弹窗已关闭（切 tab 回来 / 刷新恢复）：提供重开入口
+                    // 计划已就绪但弹窗已关闭（切页回来 / 刷新恢复）：提供重开入口
                     <div className={css.actionRow}>
                       <Button onClick={() => { setPlanOpen(true) }}>{t('snapshots.viewPlan')}</Button>
                     </div>
@@ -455,7 +490,9 @@ export function SnapshotsPanel({ api, t, recoveryApi, recoveryT }: SnapshotsPane
 
               {state.report !== null && (
                 <>
-                  <SectionTitle title={t('snapshots.reportTitle')} />
+                  <div className={css.groupHeader}>
+                    <span className={css.groupLabel}>{t('snapshots.reportTitle')}</span>
+                  </div>
                   {reportLine(t('snapshots.restored'), state.report.restored, false)}
                   {reportLine(t('snapshots.removedPlugins'), state.report.removedPlugins, false)}
                   {reportLine(t('snapshots.manualHints'), state.report.manualHints, true)}
@@ -466,8 +503,7 @@ export function SnapshotsPanel({ api, t, recoveryApi, recoveryT }: SnapshotsPane
             </>
           )}
 
-          {/* 恢复计划预览弹窗（与备份文件「查看/对比」同弹窗体系：点击行即打开，
-              loading/结果/错误都在弹窗内呈现；关闭 = 放弃展示，plan 仍镜像 store） */}
+          {/* 恢复计划预览弹窗：点击行即打开，loading/结果/错误都在弹窗内呈现 */}
           {planOpen && (
             <div
               className={css.dialogMask}
@@ -530,7 +566,7 @@ export function SnapshotsPanel({ api, t, recoveryApi, recoveryT }: SnapshotsPane
             </div>
           )}
 
-          {/* 执行恢复二次确认（破坏性操作：整文件还原/删除 + 卸载插件；busy 防重复提交） */}
+          {/* 执行恢复二次确认（破坏性操作；busy 防重复提交） */}
           <ConfirmDialog
             open={confirmOpen}
             title={t('snapshots.confirmTitle')}
@@ -556,16 +592,6 @@ export function SnapshotsPanel({ api, t, recoveryApi, recoveryT }: SnapshotsPane
             busy={managing}
             onConfirm={doDeleteSnapshot}
             onCancel={() => { setDeleteTarget(null) }}
-          />
-        </>
-      ) : (
-        <>
-          {/* —— 备份文件：导出产物管理（下载/一键导入/删除）+ 定时全量备份设置 —— */}
-          <BackupFilesCard api={api} t={t} refreshTick={backupFilesTick} />
-          <BackupScheduleCard
-            api={api}
-            t={t}
-            onBackupDone={() => { setBackupFilesTick((n) => n + 1) }}
           />
         </>
       )}
@@ -618,7 +644,7 @@ function formatRunTime(iso: string | undefined): string {
 
 /**
  * 定时全量备份设置卡：总开关 + 间隔档位 + 上次运行状态 + 保存 / 立即备份。
- * 状态自持；草稿镜像 runStore.snapshots.backupDraft（未保存修改切 tab/刷新保留），
+ * 状态自持；草稿镜像 runStore.snapshots.backupDraft（未保存修改切页/刷新保留），
  * 保存成功清草稿（宿主配置为权威）。
  */
 function BackupScheduleCard({ api, t, onBackupDone }: {
@@ -637,7 +663,7 @@ function BackupScheduleCard({ api, t, onBackupDone }: {
   const [lastRunDetail, setLastRunDetail] = useState<string | null>(null)
   const [flash, setFlash] = useState<string | null>(null)
   const [actionError, setActionError] = useState<string | null>(null)
-  /** 挂载守卫：切 tab 卸载后异步回调只更新 store（草稿），不再 setState（React 18 无告警但浪费） */
+  /** 挂载守卫：切页卸载后异步回调只更新 store（草稿），不再 setState */
   const mountedRef = useRef(true)
 
   useEffect(() => () => { mountedRef.current = false }, [])
@@ -649,7 +675,7 @@ function BackupScheduleCard({ api, t, onBackupDone }: {
       (schedule) => {
         if (!mountedRef.current) return
         setSaved(schedule)
-        // 有未保存草稿（切 tab 回来）则保留，否则以宿主配置为权威
+        // 有未保存草稿（切页回来）则保留，否则以宿主配置为权威
         setDraft(runStore.getSnapshot().snapshots.backupDraft ?? {
           enabled: schedule.enabled,
           interval: schedule.interval,
@@ -738,8 +764,30 @@ function BackupScheduleCard({ api, t, onBackupDone }: {
   const busy = saving || running
 
   return (
-    <Card className={css.card}>
-      <div className={css.groupLabel}>{t('backupSchedule.title')}</div>
+    <Card>
+      {/* 单行头：标题 + 上次运行结果徽章 + 时间 + 右侧动作（立即备份 / 保存） */}
+      <div className={css.groupHeader}>
+        <span className={css.groupLabel}>{t('backupSchedule.title')}</span>
+        {lastRun !== undefined && (
+          <Badge kind={backupRunBadgeKind(lastRun)}>{runStatusLabel(t, lastRun)}</Badge>
+        )}
+        {lastRun !== undefined && lastRunDetail !== null && lastRunDetail !== '' && (
+          <span className={css.hint}>{lastRunDetail}</span>
+        )}
+        <span className={css.statusSpacer} />
+        <Button
+          variant="primary"
+          size="sm"
+          disabled={busy || !dirty}
+          onClick={save}
+          title={dirty ? undefined : t('backupSchedule.saved')}
+        >
+          {saving ? <Spinner /> : t('backupSchedule.save')}
+        </Button>
+        <Button size="sm" disabled={busy || !(saved?.enabled ?? false)} onClick={runNow}>
+          {running ? <Spinner /> : t('backupSchedule.runNow')}
+        </Button>
+      </div>
       <div className={css.hint}>{t('backupSchedule.hint')}</div>
 
       {status === 'loading' && <Spinner label={t('backupSchedule.loading')} />}
@@ -753,113 +801,100 @@ function BackupScheduleCard({ api, t, onBackupDone }: {
 
       {status === 'ready' && (
         <>
-          <Field label={t('backupSchedule.enabled')}>
+          {/* 设置行：开关 + 间隔 +（custom 时）周几/时刻 */}
+          <div className={css.actionRow} style={{ marginTop: 8, marginBottom: 0 }}>
             <Checkbox
               checked={draft.enabled}
               onChange={(checked) => { updateDraft({ ...draft, enabled: checked }) }}
               label={t('backupSchedule.enabledHint')}
               disabled={busy}
             />
-          </Field>
-          <Field label={t('backupSchedule.interval')}>
             <select
               className={css.select}
               value={draft.interval}
               disabled={busy}
+              style={{ width: 'auto' }}
               onChange={(event) => { updateDraft({ ...draft, interval: event.target.value as BackupInterval }) }}
             >
               {BACKUP_INTERVAL_OPTIONS.map((interval) => (
                 <option key={interval} value={interval}>{intervalLabel(t, interval)}</option>
               ))}
             </select>
-          </Field>
-          {/* P0-⑤：custom 档 → 每周固定时刻选择（周几 + 时:分；缺省周一 03:00） */}
-          {draft.interval === 'custom' && (
-            <div className={css.nextStepsGroup}>
-              <div className={css.hint}>{t('backupSchedule.customHint')}</div>
-              <div className={css.actionRow}>
-                <select
-                  className={css.select}
-                  value={draft.customSchedule?.dayOfWeek ?? 1}
-                  disabled={busy}
-                  onChange={(event) => {
-                    updateDraft({
-                      ...draft,
-                      customSchedule: {
-                        dayOfWeek: Number(event.target.value),
-                        hour: draft.customSchedule?.hour ?? 3,
-                        minute: draft.customSchedule?.minute ?? 0,
-                      },
-                    })
-                  }}
-                >
-                  {WEEKDAY_OPTIONS.map((w) => (
-                    <option key={w.value} value={w.value}>{weekdayLabel(t, w.value)}</option>
-                  ))}
-                </select>
-                <select
-                  className={css.select}
-                  value={draft.customSchedule?.hour ?? 3}
-                  disabled={busy}
-                  onChange={(event) => {
-                    updateDraft({
-                      ...draft,
-                      customSchedule: {
-                        dayOfWeek: draft.customSchedule?.dayOfWeek ?? 1,
-                        hour: Number(event.target.value),
-                        minute: draft.customSchedule?.minute ?? 0,
-                      },
-                    })
-                  }}
-                >
-                  {Array.from({ length: 24 }, (_, h) => <option key={h} value={h}>{String(h).padStart(2, '0')}:00</option>)}
-                </select>
-                <select
-                  className={css.select}
-                  value={draft.customSchedule?.minute ?? 0}
-                  disabled={busy}
-                  onChange={(event) => {
-                    updateDraft({
-                      ...draft,
-                      customSchedule: {
-                        dayOfWeek: draft.customSchedule?.dayOfWeek ?? 1,
-                        hour: draft.customSchedule?.hour ?? 3,
-                        minute: Number(event.target.value),
-                      },
-                    })
-                  }}
-                >
-                  {[0, 15, 30, 45].map((m) => <option key={m} value={m}>{String(m).padStart(2, '0')}</option>)}
-                </select>
-              </div>
+            {draft.interval === 'custom' && (
+              <select
+                className={css.select}
+                value={draft.customSchedule?.dayOfWeek ?? 1}
+                disabled={busy}
+                style={{ width: 'auto' }}
+                onChange={(event) => {
+                  updateDraft({
+                    ...draft,
+                    customSchedule: {
+                      dayOfWeek: Number(event.target.value),
+                      hour: draft.customSchedule?.hour ?? 3,
+                      minute: draft.customSchedule?.minute ?? 0,
+                    },
+                  })
+                }}
+              >
+                {WEEKDAY_OPTIONS.map((w) => (
+                  <option key={w.value} value={w.value}>{weekdayLabel(t, w.value)}</option>
+                ))}
+              </select>
+            )}
+            {draft.interval === 'custom' && (
+              <select
+                className={css.select}
+                value={draft.customSchedule?.hour ?? 3}
+                disabled={busy}
+                style={{ width: 'auto' }}
+                onChange={(event) => {
+                  updateDraft({
+                    ...draft,
+                    customSchedule: {
+                      dayOfWeek: draft.customSchedule?.dayOfWeek ?? 1,
+                      hour: Number(event.target.value),
+                      minute: draft.customSchedule?.minute ?? 0,
+                    },
+                  })
+                }}
+              >
+                {Array.from({ length: 24 }, (_, h) => <option key={h} value={h}>{String(h).padStart(2, '0')}:00</option>)}
+              </select>
+            )}
+            {draft.interval === 'custom' && (
+              <select
+                className={css.select}
+                value={draft.customSchedule?.minute ?? 0}
+                disabled={busy}
+                style={{ width: 'auto' }}
+                onChange={(event) => {
+                  updateDraft({
+                    ...draft,
+                    customSchedule: {
+                      dayOfWeek: draft.customSchedule?.dayOfWeek ?? 1,
+                      hour: draft.customSchedule?.hour ?? 3,
+                      minute: Number(event.target.value),
+                    },
+                  })
+                }}
+              >
+                {[0, 15, 30, 45].map((m) => <option key={m} value={m}>{String(m).padStart(2, '0')}</option>)}
+              </select>
+            )}
+          </div>
+          {lastRunDetail !== null && lastRunDetail !== '' && (
+            <div className={css.hint} style={{ marginTop: 6 }}>
+              {t('backupSchedule.lastRun')}：{lastRunDetail}
             </div>
           )}
-          {lastRun !== undefined && (
-            <div className={css.statRow}>
-              <span className={css.hint}>{t('backupSchedule.lastRun')}</span>
-              <Badge kind={backupRunBadgeKind(lastRun)}>{runStatusLabel(t, lastRun)}</Badge>
-              {lastRunDetail !== null && lastRunDetail !== '' && <span className={css.hint}>{lastRunDetail}</span>}
-            </div>
-          )}
-          {/* P1-⑨：连续失败主动标红（≥1 次失败即在设置卡内醒目提示，不再只在状态徽章上体现） */}
+          {/* P1-⑨：连续失败主动标红（≥1 次失败即在设置卡内醒目提示） */}
           {(saved?.consecutiveFailures ?? 0) > 0 && (
-            <Banner kind="error">
+            <Banner kind="error" >
               {t('backupSchedule.consecutiveFailures', { count: String(saved!.consecutiveFailures) })}
             </Banner>
           )}
-          <div className={css.actionRow}>
-            <Button
-              variant="primary"
-              disabled={busy || !dirty}
-              onClick={save}
-              title={dirty ? undefined : t('backupSchedule.saved')}
-            >
-              {saving ? <Spinner label={t('backupSchedule.save')} /> : t('backupSchedule.save')}
-            </Button>
-            <Button disabled={busy || !(saved?.enabled ?? false)} onClick={runNow}>
-              {running ? <Spinner label={t('backupSchedule.running')} /> : t('backupSchedule.runNow')}
-            </Button>
-          </div>
+          {draft.interval === 'custom' && <div className={css.hint} style={{ marginTop: 6 }}>{t('backupSchedule.customHint')}</div>}
         </>
       )}
 
@@ -873,13 +908,9 @@ function BackupScheduleCard({ api, t, onBackupDone }: {
 
 /**
  * 备份文件管理卡（m-backup-files）：列出 exports/ 下的导出 ZIP（手动导出 + 定时备份），
- * 提供下载（复用 /download）/ 一键导入（切 Import tab + 注入 zipPath，向导直接分析）/
- * 删除（危险操作二次确认）。
- *
- * 状态组件自持（列表可随时重载，不持久化；与快照列表同级）。refreshTick 由父组件在
- * 「立即备份」完成后递增触发重载。安全：文件路径来自宿主受控 exports 目录；删除按钮
- * 恒走 ConfirmDialog（danger）；导入 = 把 zipPath 交给现有导入向导（analyze 零写入，
- * 不经过上传）。
+ * 提供下载（复用 /download）/ 一键导入（切 Import 页 + 注入 zipPath，向导直接分析）/
+ * 查看与当前配置的差异（只读）/ 删除（危险操作二次确认）。
+ * 展示升级：搜索框进工具栏行，列表改数据表（名称主列 + 来源/大小/时间/备注内联元数据）。
  */
 function BackupFilesCard({ api, t, refreshTick }: {
   api: ConfigManagerApi
@@ -948,17 +979,16 @@ function BackupFilesCard({ api, t, refreshTick }: {
     })
   }
 
-  /** 一键导入：把备份文件 zipPath 交给现有导入向导（切 Import tab；向导挂载即分析） */
+  /** 一键导入：把备份文件 zipPath 交给现有导入向导（切 Import 页；向导挂载即分析） */
   const importBackup = (file: BackupFileMeta): void => {
     runStore.patch({
       view: 'import',
-      panel: null,
+      panel: 'import',
       snapshots: { importBackup: { zipPath: file.path, name: file.name } },
     })
   }
 
-  /** P1-⑦/P2-⑬：查看备份内容 + 与此备份的差异（只读，零写入）。
-   *  状态组件内自持（弹窗即会话，关闭即放弃；不持久化）。 */
+  /** P1-⑦/P2-⑬：查看备份内容 + 与此备份的差异（只读，零写入）。 */
   const inspectBackup = (file: BackupFileMeta): void => {
     setActionError(null)
     setInspect({ name: file.name, loading: true, error: null, result: null })
@@ -993,10 +1023,36 @@ function BackupFilesCard({ api, t, refreshTick }: {
     )
   }
 
+  /** 修改时间（等宽 YYYY-MM-DD HH:mm；完整本地时间在 title）。 */
+  const fullTime = (ms: number): string => {
+    const d = new Date(ms)
+    if (Number.isNaN(d.getTime())) return ''
+    const p = (n: number): string => String(n).padStart(2, '0')
+    return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`
+  }
+
+  /** 备注展示：全问号/控制符（编码损坏）→ 可读文案，其余原样。 */
+  const noteText = (note: string): string =>
+    /^[?\s]+$/.test(note) ? t('backupFiles.noteUnreadable') : note
+
   return (
-    <Card className={css.card}>
-      <div className={css.groupLabel}>{t('backupFiles.title')}</div>
-      <div className={css.hint}>{t('backupFiles.hint')}</div>
+    <Card className={`${css.activityCard} ${css.fillCard}`}>
+      <div className={css.groupHeader}>
+        <span className={css.groupLabel}>{t('backupFiles.title')}</span>
+        <span className={css.badge}>{files.length}</span>
+        <span className={css.statusSpacer} />
+        {status === 'ready' && files.length > 0 && (
+          <input
+            type="search"
+            className={css.input}
+            placeholder={t('backupFiles.searchPlaceholder')}
+            value={search}
+            style={{ width: 170, height: 24 }}
+            onChange={(e: ChangeEvent<HTMLInputElement>) => { setSearch(e.target.value) }}
+          />
+        )}
+      </div>
+      <div className={css.hint} style={{ marginBottom: 8, flex: 'none' }}>{t('backupFiles.hint')}</div>
 
       {status === 'loading' && <Spinner label={t('backupFiles.loading')} />}
 
@@ -1009,43 +1065,53 @@ function BackupFilesCard({ api, t, refreshTick }: {
 
       {status === 'ready' && files.length === 0 && <Empty>{t('backupFiles.empty')}</Empty>}
 
-      {/* P0-④：备份文件搜索框（文件名 / 备注；不持久化——列表可随时重载） */}
       {status === 'ready' && files.length > 0 && (
-        <div className={css.field}>
-          <input
-            type="search"
-            className={css.input}
-            placeholder={t('backupFiles.searchPlaceholder')}
-            value={search}
-            onChange={(e: ChangeEvent<HTMLInputElement>) => { setSearch(e.target.value) }}
-          />
-        </div>
-      )}
-
-      {status === 'ready' && files.length > 0 && (
-        <div className={css.backupFileList} role="list" aria-label={t('backupFiles.title')}>
-          {visibleFiles.map((file) => (
-            <div key={file.name} className={css.backupFileRow} role="listitem">
-              <span className={css.backupFileName} title={file.name}>{file.name}</span>
-              <Badge kind="info">
-                {file.source === 'auto' ? t('backupFiles.source.auto') : t('backupFiles.source.manual')}
-              </Badge>
-              <span className={css.backupFileMeta}>{formatBytes(file.sizeBytes)}</span>
-              <span className={css.backupFileMeta}>{new Date(file.mtimeMs).toLocaleString()}</span>
-              {file.note !== null && file.note !== '' && (
-                /* 备注徽章：同 badge(info) 视觉但可换行（长备注不再撑破行产生横向滚动条） */
-                <span className={css.backupFileNote} title={file.note}>💬 {file.note}</span>
-              )}
-              <span className={css.actionRow}>
-                <Button disabled={deleting} onClick={() => { download(file) }}>{t('backupFiles.download')}</Button>
-                <Button disabled={deleting} onClick={() => { importBackup(file) }}>{t('backupFiles.import')}</Button>
-                <Button disabled={deleting} onClick={() => { inspectBackup(file) }}>{t('backupFiles.inspect')}</Button>
-                <Button variant="danger" disabled={deleting} onClick={() => { setConfirmDelete(file) }}>
-                  {t('backupFiles.delete')}
-                </Button>
-              </span>
-            </div>
-          ))}
+        <div className={`${css.tableWrap} ${css.fillViewport}`}>
+          <div className={css.tableScroll}>
+            <table className={`${css.dataTable} ${css.tableFixed} ${css.tableCompact}`} role="list" aria-label={t('backupFiles.title')}>
+              <thead>
+                <tr>
+                  <th>{t('backupFiles.name')}</th>
+                  <th className={css.num} style={{ width: 64 }}>{t('backupFiles.size')}</th>
+                  <th style={{ width: 130 }}>{t('backupFiles.time')}</th>
+                  <th className={css.cellActions} style={{ width: 138 }}>{t('snapshots.actions')}</th>
+                </tr>
+              </thead>
+              <tbody>
+                {visibleFiles.map((file) => (
+                  <tr key={file.name}>
+                    <td>
+                      <div className={css.cellMain}>
+                        <span className={`${css.cellTitle} ${css.mono}`} title={file.name}>{midEllipsis(file.name, 20)}</span>
+                        <span className={css.cellMeta}>
+                          <Badge kind={file.source === 'auto' ? 'info' : 'ok'} title={file.source === 'auto' ? t('backupFiles.source.auto') : t('backupFiles.source.manual')}>
+                            <span aria-hidden="true">{file.source === 'auto' ? '⏱' : '✎'}</span>
+                            {file.source === 'auto' ? t('backupFiles.source.auto') : t('backupFiles.source.manual')}
+                          </Badge>
+                          {file.note !== null && file.note !== undefined && file.note !== '' && (
+                            <span title={file.note}>💬 {noteText(file.note)}</span>
+                          )}
+                        </span>
+                      </div>
+                    </td>
+                    <td className={css.num}>{formatBytes(file.sizeBytes)}</td>
+                    <td className={css.dim} title={new Date(file.mtimeMs).toLocaleString()}>
+                      <span className={css.mono} style={{ fontSize: '11px' }}>{fullTime(file.mtimeMs)}</span>
+                    </td>
+                    <td className={css.cellActions}>
+                      <span className={css.rowActions}>
+                        <IconButton icon="⭳" label={t('backupFiles.download')} disabled={deleting} onClick={() => { download(file) }} />
+                        <IconButton icon="⇤" label={t('backupFiles.import')} disabled={deleting} onClick={() => { importBackup(file) }} />
+                        <IconButton icon="⌕" label={t('backupFiles.inspect')} disabled={deleting} onClick={() => { inspectBackup(file) }} />
+                        <span className={css.rowDivider} aria-hidden="true" />
+                        <IconButton icon="✕" label={t('backupFiles.delete')} danger disabled={deleting} onClick={() => { setConfirmDelete(file) }} />
+                      </span>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
           {visibleFiles.length === 0 && <Empty>{t('backupFiles.searchEmpty')}</Empty>}
         </div>
       )}
@@ -1105,10 +1171,7 @@ function BackupFilesCard({ api, t, refreshTick }: {
 
 /**
  * 备份内容查看 + 「与此备份 diff」只读视图（P1-⑦ / P2-⑬，绑 src/ui/backup-inspect.ts 纯函数）：
- * - 分区清单（含条目计数徽章）；
- * - 差异摘要徽章（将变更 / 已一致 / 冲突 / 需补录密钥 / 路径映射 / 需重启）；
- * - 逐项变更列表（plan.items 的 kind + description，限高内滚）。
- * 只读：编译自 analyze/plan（零写入），不提供任何执行入口。
+ * 分区清单 + 差异摘要徽章 + 逐项变更列表（限高内滚）。只读，不提供任何执行入口。
  */
 function BackupInspectView({ result, t }: {
   result: BackupInspectResult
@@ -1139,17 +1202,17 @@ function BackupInspectView({ result, t }: {
   return (
     <div>
       {/* 分区清单（条目计数徽章） */}
-      <Card className={css.card}>
+      <div className={css.inspectGroup}>
         <div className={css.groupLabel}>{t('backupFiles.inspectSections')}</div>
         <div className={css.statRow}>
           {sections.map((s) => (
             <Badge key={s.section} kind="info">{s.section}: {s.count}</Badge>
           ))}
         </div>
-      </Card>
+      </div>
 
       {/* 差异摘要（导这个备份会动你什么） */}
-      <Card className={css.card}>
+      <div className={css.inspectGroup}>
         <div className={css.groupLabel}>{t('backupFiles.inspectDiff')}</div>
         <div className={css.statRow}>
           {summary.willChange > 0 && <Badge kind="info">{t('import.preview.willChange', { count: String(summary.willChange) })}</Badge>}
@@ -1159,16 +1222,15 @@ function BackupInspectView({ result, t }: {
           {summary.pathMappingsNeeded > 0 && <Badge kind="warn">{t('import.preview.paths', { count: String(summary.pathMappingsNeeded) })}</Badge>}
           {summary.needsRestart && <Badge kind="warn">{t('report.needsRestart')}</Badge>}
         </div>
-      </Card>
+      </div>
 
-      {/* 变更明细：按优先级分组（冲突 → 变更 → 路径映射 → 一致跳过 → 其他），
-          每组标题带计数徽章 + 组内 kindTag 同色（一眼区分需决策/将写入/需处理/无需处理） */}
+      {/* 变更明细：按优先级分组（冲突 → 变更 → 路径映射 → 一致跳过 → 其他） */}
       {groups.length > 0 && (
-        <Card className={css.card}>
+        <div className={css.inspectGroup}>
           <div className={css.groupLabel}>{t('backupFiles.inspectItems')}</div>
           {groups.map((group) => (
             <div key={group.key} className={css.inspectGroup}>
-              <div className={css.statRow}>
+              <div className={css.groupHeader}>
                 <span className={css.groupLabel}>{t(groupLabelKey(group.key))}</span>
                 <Badge kind={group.kind}>{String(group.items.length)}</Badge>
               </div>
@@ -1184,7 +1246,7 @@ function BackupInspectView({ result, t }: {
               </div>
             </div>
           ))}
-        </Card>
+        </div>
       )}
     </div>
   )

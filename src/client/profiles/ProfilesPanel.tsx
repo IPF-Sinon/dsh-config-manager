@@ -287,6 +287,14 @@ export function ProfilesPanel({ api, t }: ProfilesPanelProps) {
 
   const saveInvalid = validateProfileNameInput(state.saveName.trim()) !== null && state.saveName.trim() !== ''
 
+  /** 更新时间（等宽 YYYY-MM-DD HH:mm；完整本地时间见 title）。 */
+  const fullTime = (v: string | number): string => {
+    const d = new Date(v)
+    if (Number.isNaN(d.getTime())) return ''
+    const p = (n: number): string => String(n).padStart(2, '0')
+    return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`
+  }
+
   return (
     <div className={css.viewBody}>
       <SectionTitle title={t('profiles.title')} subtitle={t('profiles.subtitle')} />
@@ -322,40 +330,36 @@ export function ProfilesPanel({ api, t }: ProfilesPanelProps) {
       {state.status === 'ready' && state.profiles.length === 0 && (
         <Empty>{t('profiles.empty')}</Empty>
       )}
-      {state.status === 'ready' && state.profiles.length > 0 && (
+{state.status === 'ready' && state.profiles.length > 0 && (
         <div className={css.snapshotList} role="list" aria-label={t('profiles.title')}>
-          <div className={css.profileRowHeader}>
-            <span>{t('profiles.name')}</span>
-            <span>{t('profiles.sections')}</span>
-            <span>{t('profiles.updatedAt')}</span>
-            <span>{t('snapshots.actions')}</span>
-          </div>
           {state.profiles.map((profile) => (
             <div key={profile.name} className={css.profileRow} role="listitem">
-              <button
-                type="button"
-                className={css.profileRowMain}
-                onClick={() => { runPreview(profile) }}
-                title={t('profiles.previewHint')}
-              >
-                <span title={profile.name}>{profile.name}</span>
-                <span>
-                  {profile.sections.slice(0, 4).join(', ')}
-                  {profile.sections.length > 4 ? ` +${profile.sections.length - 4}` : ''}
-                </span>
-                <span>{new Date(profile.updatedAt).toLocaleString()}</span>
-              </button>
-              <span className={css.actionRow}>
-                <Button onClick={() => { runPreview(profile) }}>{t('profiles.switch')}</Button>
-                <Button
-                  onClick={() => { patch({ renameTarget: profile, renameValue: profile.name, actionError: null }) }}
+              <div className={css.profileRowHeader}>
+                <button
+                  type="button"
+                  className={css.profileRowMain}
+                  onClick={() => { runPreview(profile) }}
+                  title={t('profiles.previewHint')}
                 >
-                  {t('profiles.rename')}
-                </Button>
-                <Button variant="danger" onClick={() => { patch({ deleteTarget: profile, actionError: null }) }}>
-                  {t('profiles.delete')}
-                </Button>
-              </span>
+                  <span title={profile.name}>{profile.name}</span>
+                </button>
+                <span className={css.actionRow} style={{ margin: 0 }}>
+                  <Button size="sm" onClick={() => { runPreview(profile) }}>{t('profiles.switch')}</Button>
+                  <Button
+                    size="sm"
+                    onClick={() => { patch({ renameTarget: profile, renameValue: profile.name, actionError: null }) }}
+                  >
+                    {t('profiles.rename')}
+                  </Button>
+                  <Button size="sm" variant="danger" onClick={() => { patch({ deleteTarget: profile, actionError: null }) }}>
+                    {t('profiles.delete')}
+                  </Button>
+                </span>
+              </div>
+              <div className={css.cellMeta} style={{ marginTop: 2 }}>
+                <span className={css.mono}>{fullTime(profile.updatedAt)}</span>
+                <span>· {profile.sections.join('、')}</span>
+              </div>
             </div>
           ))}
         </div>

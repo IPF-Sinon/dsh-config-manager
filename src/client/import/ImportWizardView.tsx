@@ -645,17 +645,24 @@ function ImportWizardBody({ api, t }: ImportWizardViewProps) {
   if (step === 'compatibility') {
     const analysis = imp.analysis
     if (analysis === null) return null
+    const scoreKey = analysis.compatibility === 'unsupported'
+      ? 'import.compatibility.score.unsupported'
+      : analysis.compatibility === 'partial'
+        ? 'import.compatibility.score.partial'
+        : analysis.compatibility === 'good'
+          ? 'import.compatibility.score.good'
+          : 'import.compatibility.score.excellent'
     return (
       <div className={css.viewBody}>
         <SectionTitle title={t('import.compatibility.title')} />
         <div className={css.statRow}>
           <Badge kind={analysis.compatibility === 'unsupported' ? 'error' : analysis.compatibility === 'partial' ? 'warn' : 'ok'}>
-            {t('import.compatibility.score', { score: SCORE_LABEL[analysis.compatibility] ?? analysis.compatibility })}
+            {t('import.compatibility.score', { score: t(scoreKey as Parameters<TranslateNS<'config-manager'>>[0]) })}
           </Badge>
-          <Badge kind="info">{analysis.sectionsInZip.length} sections</Badge>
-          <Badge kind="info">plugins: {analysis.pluginSummary.installed}✓ / {analysis.pluginSummary.toInstall}✗</Badge>
-          {analysis.pathIssues.length > 0 && <Badge kind="warn">{analysis.pathIssues.length} paths</Badge>}
-          {analysis.secretCount > 0 && <Badge kind="warn">{analysis.secretCount} secrets</Badge>}
+          <Badge kind="info">{t('import.compatibility.sections', { count: String(analysis.sectionsInZip.length) })}</Badge>
+          <Badge kind="info">{t('import.compatibility.plugins', { installed: String(analysis.pluginSummary.installed), toInstall: String(analysis.pluginSummary.toInstall) })}</Badge>
+          {analysis.pathIssues.length > 0 && <Badge kind="warn">{t('import.compatibility.paths', { count: String(analysis.pathIssues.length) })}</Badge>}
+          {analysis.secretCount > 0 && <Badge kind="warn">{t('import.compatibility.secrets', { count: String(analysis.secretCount) })}</Badge>}
           {analysis.encrypted && <Badge kind="error">🔒 {t('import.decrypt.badge')}</Badge>}
         </div>
         {analysis.warnings.length > 0 && (
@@ -663,6 +670,20 @@ function ImportWizardBody({ api, t }: ImportWizardViewProps) {
             {analysis.warnings.map((w, i) => <div key={i}>{w}</div>)}
           </Banner>
         )}
+        {/* 备份包含的分区（两列网格；与总览「分区构成」同模式） */}
+        <Card>
+          <div className={css.groupHeader}>
+            <span className={css.groupLabel}>{t('import.compatibility.sectionsTitle')}</span>
+            <span className={css.statusSpacer} />
+          </div>
+          <div className={css.sectionGrid}>
+            {analysis.sectionsInZip.map((s) => (
+              <div key={s} className={css.sectionRow}>
+                <span className={css.sectionName}>{s}</span>
+              </div>
+            ))}
+          </div>
+        </Card>
         {error !== null && <ErrorBanner error={error} onRetry={() => { void goPreview() }} t={api.t} />}
         <div className={css.actionRow}>
           <Button variant="ghost" onClick={resetWizard}>{t('import.select.reselect')}</Button>

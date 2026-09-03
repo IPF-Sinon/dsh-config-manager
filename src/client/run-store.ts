@@ -65,14 +65,12 @@ import type { RecoveryPreview, RecoveryStatus, RecoveryVerifyResult } from '../u
 export type MainView = 'export' | 'import'
 
 /**
- * 设置页低频面板（ConfigManagerSection 的 tab；panel 非空时覆盖主视图）。
- * 聚合优化（UX 2026-08）：把「关于」与「迁移历史」收进「更多」作为子 tab，
- * 「恢复」并入「备份与快照」作为子 tab —— 一级 tab 从 8 收敛为 6。
- * UX 重构（2026-09）：新增 'overview' 总览面板并作为默认打开页；
- * 旧持久化值（about/history/recovery）由 parsePersistedState 迁移到新结构，
- * 旧「主视图」缺省值（panel 缺失/null，即导出与导入）迁移为 'overview'。
+ * 设置页页面（Workbench Rebuild 2026-09：export/import 升为一级页面）。
+ * 旧顶级 tab `more`（历史/关于子 tab）由 Shell 的活动抽屉/关于弹窗取代，
+ * parsePersistedState 将旧值迁移到 'overview'；旧 `panel:null`（主视图）语义
+ * 由 view 字段承担，持久化载荷向后兼容。
  */
-export type PanelId = 'overview' | 'snapshots' | 'sync' | 'market' | 'profiles' | 'more'
+export type PanelId = 'overview' | 'export' | 'import' | 'snapshots' | 'sync' | 'market' | 'profiles'
 
 /** 导出模式。 */
 export type ExportMode = 'quick' | 'custom'
@@ -208,11 +206,12 @@ export interface MarketStoreSlice {
  *  白名单剔除 —— 恢复是否仍在执行以宿主 RunRegistry（/runs + /progress）为权威，
  *  刷新后经 resume() 重新发现；浏览器持久化绝不作为 destructive operation 的状态源。 */
 /**
- * 快照面板二级 tab：restore = 快照恢复（导入前回滚点）；files = 备份文件管理；
- * recovery = 恢复（Phase 5，事故驱动的回滚/恢复 —— 聚合优化后并入「备份与快照」）。
- * 旧顶级 tab `panel:'recovery'` 在 parsePersistedState 迁移为 `panel:'snapshots'` + `subTab:'recovery'`。
+ * 快照面板二级子视图（Workbench Rebuild：schedule 升为独立子视图，不再寄居 files 底部）。
+ * restore = 安全快照（导入前回滚点）；files = 备份文件管理；schedule = 定时备份设置；
+ * recovery = 事故恢复（Phase 5）。旧顶级 tab `panel:'recovery'` 在 parsePersistedState
+ * 迁移为 `panel:'snapshots'` + `subTab:'recovery'`。
  */
-export type SnapshotsSubTab = 'restore' | 'files' | 'recovery'
+export type SnapshotsSubTab = 'restore' | 'files' | 'schedule' | 'recovery'
 
 /** 配置档案面板的运行时切片（无敏感字段：Profile 天然不含秘密值）。 */
 export interface ProfilesStoreSlice {
@@ -336,7 +335,7 @@ export interface PersistedImportState {
 export interface PersistedState {
   v: 1
   view: MainView
-  /** 当前打开的低频面板（null = 主视图 export/import）；刷新后回到原 tab */
+  /** 当前页面（旧载荷可能为 null = 旧「主视图」，parse 迁移到具体页面） */
   panel: PanelId | null
   export: PersistedExportState
   import: PersistedImportState
@@ -393,7 +392,8 @@ export interface ImportLiveState extends PersistedImportState {
 export interface StoreState {
   v: 1
   view: MainView
-  panel: PanelId | null
+  /** 当前页面（Workbench Rebuild：export/import 为一级页面；非 null） */
+  panel: PanelId
   export: ExportLiveState
   import: ImportLiveState
   sync: SyncStoreSlice
@@ -407,8 +407,7 @@ export interface StoreState {
 /** patch 的输入形状（浅合并对应切片）。 */
 export interface StorePatch {
   view?: MainView
-  /** null = 回到主视图（export/import） */
-  panel?: PanelId | null
+  panel?: PanelId
   export?: Partial<ExportLiveState>
   import?: Partial<ImportLiveState>
   sync?: Partial<SyncStoreSlice>
@@ -566,7 +565,7 @@ function defaultState(): StoreState {
   return {
     v: 1,
     view: 'export',
-    // UX 重构（2026-09）：默认打开总览页（panel:'overview'；导出与导入 = panel:null）
+    // Workbench Rebuild（2026-09）：默认打开总览页
     panel: 'overview',
     export: defaultExportState(),
     import: defaultImportState(),
@@ -770,40 +769,46 @@ export function parsePersistedState(raw: string): PersistedState | null {
   const exp = p['export']
   const imp = p['import']
   if (typeof exp !== 'object' || exp === null || typeof imp !== 'object' || imp === null) return null
-  // panel：旧载荷「主视图」缺省值（缺失/null/非法）→ 'overview'（UX 重构 2026-09 的
-  // 新默认页）。聚合优化（2026-08）旧值迁移：'about'/'history' → 'more' + 对应 moreSub；
-  // 'recovery' → 'snapshots' + snapshots.subTab='recovery'。旧 8 tab 值在新结构下不丢状态。
+  // panel：Workbench Rebuild（2026-09）页面模型 —— export/import 为一级页面；
+  // 旧载荷迁移：null/缺失（旧「主视图」）→ 由 view 字段映射到具体页面（export/import），
+  // 'more'/'about'/'history'（旧聚合 tab）→ 'overview'，'recovery' → 'snapshots' + subTab。
   const rawPanel = p['panel']
-  let panel: PanelId | null = null
+  let panel: PanelId
   let moreSub: MoreStoreSlice['moreSub'] = 'about'
   let snapshotsSubTab: SnapshotsSubTab = 'restore'
+  const viewRaw = view as MainView
   switch (rawPanel) {
     case 'overview':
     case 'snapshots':
     case 'sync':
     case 'market':
     case 'profiles':
-    case 'more':
+    case 'export':
+    case 'import':
       panel = rawPanel
       break
     case 'about':
-      panel = 'more'
+      panel = 'overview'
       moreSub = 'about'
       break
     case 'history':
-      panel = 'more'
+      panel = 'overview'
       moreSub = 'history'
+      break
+    case 'more':
+      panel = 'overview'
       break
     case 'recovery':
       panel = 'snapshots'
       snapshotsSubTab = 'recovery'
       break
     default:
-      // 旧「主视图」缺省值（null/缺失/非法）→ 'overview'（UX 重构 2026-09 新默认页：
-      // 升级后首次进入落在总览页，符合新 IA 的产品语义）
-      panel = 'overview'
+      // 旧「主视图」缺省值（null/缺失/非法）→ 由 view 映射（旧用户回到原导出/导入页）
+      panel = viewRaw
       break
   }
+  // view 与 panel 镜像（export/import 页面时 view 同步，保证旧字段语义一致）
+  const mirroredView: MainView = panel === 'import' ? 'import' : panel === 'export' ? 'export' : viewRaw
   // sync/market/snapshots：旧载荷可能缺失 → 默认切片（字段级缺失由 applyPersisted 兜底）
   const sync = isRecord(p['sync']) ? p['sync'] as unknown as PersistedSyncState : defaultSyncState()
   const market = isRecord(p['market']) ? p['market'] as unknown as MarketStoreSlice : defaultMarketState()
@@ -818,7 +823,7 @@ export function parsePersistedState(raw: string): PersistedState | null {
   const more = isRecord(p['more'])
     ? { ...defaultMoreState(), ...p['more'] as unknown as MoreStoreSlice }
     : { moreSub }
-  return { v: 1, view, panel, export: exp as PersistedExportState, import: imp as PersistedImportState, sync, market, snapshots: migratedSnapshots, profiles, recovery, more }
+  return { v: 1, view: mirroredView, panel, export: exp as PersistedExportState, import: imp as PersistedImportState, sync, market, snapshots: migratedSnapshots, profiles, recovery, more }
 }
 
 /** 运行时不变量小工具：值为普通对象。 */
@@ -1049,7 +1054,8 @@ export class RunStore {
     this.state = {
       v: 1,
       view: parsed.view,
-      panel: parsed.panel,
+      // parsePersistedState 已把旧 null/非法值迁移为具体页面；这里兜底 'overview'
+      panel: parsed.panel ?? 'overview',
       export: {
         ...defaultExportState(),
         ...parsed.export,

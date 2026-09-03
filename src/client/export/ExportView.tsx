@@ -1,19 +1,24 @@
 /**
- * 导出视图（规范 §1 / §21，绑 src/ui/export-flow.ts 的 ExportFlow 控制器）。
+ * 导出页（Export —— Workbench Rebuild 2026-09，绑 src/ui/export-flow.ts 的 ExportFlow 控制器）。
  *
+ * 布局（564px 画布，致密单列）：
+ *   1. 工具栏：模式分段（快速 / 自定义）+ 模式提示 + 预览 ghost + 立即导出 primary
+ *   2. 自定义模式：分组分区目录（两列致密勾选；分区说明入 tooltip；设备相关/敏感徽章内联）
+ *   3. 选项行：加密备份 / 导出密钥 复选 +（加密时）密码双列内联
+ *   4. 命名行：自定义文件名 + 备注 双列
+ *   5. 预览横幅 / 进度条 / 诚实报告 + 自动下载提示
+ *
+ * 业务能力（全部保留，与旧版一致）：
  * - Quick：一键导出推荐分区（ExportFlow.quickSelection()）；
- * - Custom：按 §1 分组目录（EXPORT_GROUPS × DEFAULT_CATEGORIES）逐项勾选，
- *   ExportFlow.validateSelection() 给出设备相关分区警告；
- * - 安全选项（两个独立选项）：
- *   - 加密备份：勾选后设置加密密码（AES-256-GCM），备份标记 encrypted、导入需密码；
- *     密码仅本次内存使用，经 api.exportPassword 随请求体传给 Host 半，绝不落盘/入
- *     manifest，**也绝不进入 sessionStorage** —— m2 白名单剔除，刷新后要求重输；
- *   - 导出密钥：把真实凭据值写入备份；勾选时自动联动选中加密（密钥绝不明文存储），
- *     取消加密会一并取消导出密钥（core 安全不变量 includeSecrets ⇒ encryption）。
- * - 进度：ExportFlow.run 发出 ProgressEvent → ProgressBar；
- * - 结果：ReportView(export) + 下载按钮（File System Access API 流式落盘）。
+ * - Custom：按分组逐项勾选，ExportFlow.validateSelection() 给出设备相关分区警告；
+ * - 安全选项：加密备份（AES-256-GCM）与导出密钥两个独立选项；勾选导出密钥自动联动
+ *   勾选加密（密钥绝不明文），取消加密一并取消导出密钥（includeSecrets ⇒ encrypt）；
+ * - 自定义文件名（失焦自动补全 .zip；合法性校验与宿主一致）+ 备注；
+ * - 导出前只读预览（export-preview 端点，零写入）；
+ * - 密码仅内存（api.exportPassword 随请求体传输，绝不落盘/入 sessionStorage）；
+ * - 导出完成自动下载到浏览器「下载」目录（可再手动下载）。
  *
- * m2：全部 UI 状态由模块级 runStore 持有（切 tab/关面板不重建、刷新恢复），
+ * m2：全部 UI 状态由模块级 runStore 持有（切页/关面板不重建、刷新恢复），
  * 控制器实例（ExportFlow）由 store 缓存复用。
  */
 import { useCallback, useRef, useState, useSyncExternalStore } from 'react'
@@ -25,7 +30,7 @@ import type { TranslateNS } from '../client-types.ts'
 import type { ConfigManagerApi, ExportPreviewResponse } from '../api.ts'
 import { runStore, type ExportMode } from '../run-store.ts'
 import { formatBytes } from '../../ui/report.ts'
-import { Badge, Banner, Button, Card, Checkbox, SectionTitle, Spinner } from '../common/ui.tsx'
+import { Badge, Banner, Button, Checkbox, Segmented, Spinner } from '../common/ui.tsx'
 import { ErrorBanner } from '../common/ErrorBanner.tsx'
 import { ProgressBar } from '../common/ProgressBar.tsx'
 import { ReportView } from '../common/ReportView.tsx'
@@ -37,13 +42,13 @@ export interface ExportViewProps {
 }
 
 /**
- * 导出主视图：Quick/Custom 切换 → 勾选/密码 → 执行 → 进度 → 报告 → 下载。
+ * 导出页：Quick/Custom 切换 → 勾选/密码 → 执行 → 进度 → 报告 → 自动下载。
  */
 export function ExportView({ api, t }: ExportViewProps) {
-  // m2：状态统一来自模块级 store（sessionStorage 持久化；切 tab 不重建）
+  // m2：状态统一来自模块级 store（sessionStorage 持久化；切页不重建）
   const state = useSyncExternalStore(runStore.subscribe, runStore.getSnapshot)
   const exp = state.export
-  // 控制器实例由 store 缓存复用（切 tab / 关面板不重建）
+  // 控制器实例由 store 缓存复用（切页 / 关面板不重建）
   const flow = runStore.exportFlow(api)
 
   const mode = exp.mode
@@ -62,9 +67,9 @@ export function ExportView({ api, t }: ExportViewProps) {
   const result = exp.result
   const error = exp.error
   const downloaded = exp.downloaded
-  /** 下载进行中（瞬态 UI：下载通常数秒，切 tab 后由 api 层继续，切回显示完成态） */
+  /** 下载进行中（瞬态 UI） */
   const [downloading, setDownloading] = useState(false)
-  /** 下载防重入 ref（导出完成自动下载 + 用户手动下载共享；避免双击并发下载同一文件） */
+  /** 下载防重入 ref */
   const downloadingRef = useRef(false)
   /** P2-⑫：导出前预览（null = 未请求；进行中/结果/错误） */
   const [preview, setPreview] = useState<{
@@ -120,7 +125,6 @@ export function ExportView({ api, t }: ExportViewProps) {
     encrypt && (password === '' || password !== passwordConfirm)
 
   /** 自定义文件名合法性（P0-④）：留空合法（自动命名）；非空必须合法文件名。
-   *  无需手动输入 .zip 后缀 —— 校验只针对「去 .zip 后缀后的基础名」，
    *  提交时经 normalizeExportFileName 自动补全 .zip（host 端 isValidExportFileName 仍兜底）。 */
   const trimmedName = fileName.trim()
   const baseName = trimmedName.replace(/\.zip$/i, '')
@@ -154,7 +158,7 @@ export function ExportView({ api, t }: ExportViewProps) {
           progress: { stage: 'done', step: 1, total: 1 },
         },
       })
-      // 导出完成即自动下载到浏览器「下载」目录，无需用户再点 Download 按钮
+      // 导出完成即自动下载到浏览器「下载」目录
       await download(run.zipPath)
     } catch (err) {
       runStore.patch({ export: { error: err instanceof Error ? err.message : String(err) } })
@@ -164,17 +168,15 @@ export function ExportView({ api, t }: ExportViewProps) {
     }
   }
 
-  /** 把导出的 ZIP 下载到浏览器「下载」目录（默认静默下载，不弹另存为对话框）。
-   *  防重入：downloadingRef 作锁，进行中忽略重复点击/自动触发；失败后恢复可重试。 */
+  /** 把导出的 ZIP 下载到浏览器（默认静默下载；防重入锁共享）。 */
   const download = async (zipPath: string): Promise<void> => {
     if (zipPath === '' || downloadingRef.current) return
     downloadingRef.current = true
     setDownloading(true)
     try {
       runStore.patch({ export: { error: null } })
-      const outcome = await api.download(zipPath)
+      await api.download(zipPath)
       runStore.patch({ export: { downloaded: true } })
-      void outcome // blob/streamed 由 api 处理；此处仅确认成功
     } catch (err) {
       runStore.patch({ export: { error: err instanceof Error ? err.message : String(err) } })
     } finally {
@@ -188,53 +190,65 @@ export function ExportView({ api, t }: ExportViewProps) {
 
   return (
     <div className={css.viewBody}>
-      <SectionTitle title={t('view.export')} subtitle={t('section.description')} />
-
-      {/* 模式切换 */}
-      <div className={css.modeTabs} role="tablist">
-        <button type="button" role="tab" aria-selected={mode === 'quick'} data-active={mode === 'quick' ? '' : undefined} className={css.modeTab} onClick={() => { setMode('quick') }}>
-          {t('export.mode.quick')}
-        </button>
-        <button type="button" role="tab" aria-selected={mode === 'custom'} data-active={mode === 'custom' ? '' : undefined} className={css.modeTab} onClick={() => { setMode('custom') }}>
-          {t('export.mode.custom')}
-        </button>
+      {/* 1. 工具栏：模式 + 预览 + 执行 */}
+      <div className={css.actionRow}>
+        <Segmented
+          items={[
+            { id: 'quick', label: t('export.mode.quick') },
+            { id: 'custom', label: t('export.mode.custom') },
+          ]}
+          active={mode}
+          onChange={(id) => { setMode(id as ExportMode) }}
+          ariaLabel={t('view.export')}
+        />
+        <span className={css.statusSpacer} />
+        <Button size="sm" disabled={running} title={t('export.preview')} onClick={() => { void runPreview() }}>
+          {preview?.loading === true ? <Spinner /> : <span aria-hidden="true">◔</span>} {t('export.preview')}
+        </Button>
+        <Button
+          variant="primary"
+          disabled={running || passwordInvalid || fileNameInvalid}
+          onClick={() => { void runExport() }}
+        >
+          {running ? <Spinner /> : t('export.run')}
+        </Button>
       </div>
       <div className={css.modeHint}>
         {mode === 'quick' ? t('export.mode.quickHint') : t('export.mode.customHint')}
       </div>
 
-      {/* Custom：分组勾选目录 */}
+      {/* 2. Custom：分组分区目录（两列致密勾选） */}
       {mode === 'custom' && (
-        <div className={css.groupList}>
+        <div className={css.exportGrid}>
           {EXPORT_GROUPS.map((group) => {
             const categories = flow.categories.filter((c) => c.group === group.id)
             if (categories.length === 0) return null
             return (
-              <Card key={group.id} className={css.groupCard}>
+              <div key={group.id} className={css.exportGroup}>
                 <div className={css.groupHeader}>
                   <span className={css.groupLabel}>{group.label}</span>
                   {group.note !== undefined && <span className={css.groupNote}>{group.note}</span>}
                 </div>
-                <div className={css.groupItems}>
+                <div className={css.exportItems}>
                   {categories.map((cat) => (
-                    <Checkbox
-                      key={cat.id}
-                      checked={selection.includes(cat.id)}
-                      onChange={(checked) => { toggleSection(cat.id, checked) }}
-                      label={
-                        <span className={css.categoryItem}>
-                          <span className={css.categoryName}>{cat.label}</span>
-                          <span className={css.categoryDesc}>{cat.description}</span>
-                          {cat.portability !== 'portable' && (
-                            <Badge kind={cat.portability === 'deviceSpecific' ? 'warn' : 'info'}>{cat.portability}</Badge>
-                          )}
-                          {cat.sensitive === true && <Badge kind="warn">secret</Badge>}
-                        </span>
-                      }
-                    />
+                    <div key={cat.id} className={css.exportItem} title={cat.description}>
+                      <Checkbox
+                        checked={selection.includes(cat.id)}
+                        onChange={(checked) => { toggleSection(cat.id, checked) }}
+                        label={
+                          <span className={css.categoryItem}>
+                            <span className={css.categoryName}>{cat.label}</span>
+                            {cat.portability !== 'portable' && (
+                              <Badge kind={cat.portability === 'deviceSpecific' ? 'warn' : 'info'}>{cat.portability}</Badge>
+                            )}
+                            {cat.sensitive === true && <Badge kind="warn">secret</Badge>}
+                          </span>
+                        }
+                      />
+                    </div>
                   ))}
                 </div>
-              </Card>
+              </div>
             )
           })}
         </div>
@@ -250,45 +264,41 @@ export function ExportView({ api, t }: ExportViewProps) {
         </Banner>
       )}
 
-      {/* 安全选项：加密备份 / 导出密钥（两个独立选项） */}
-      <Card className={css.optionsCard}>
-        <span className={css.optionsHeader}>{t('export.security')}</span>
+      {/* 3. 选项行：加密 / 导出密钥（联动规则保持） */}
+      <div className={css.optionsRow}>
         <Checkbox
           checked={encrypt}
           onChange={setEncrypt}
           label={<span className={css.categoryName}>{t('export.encrypt')}</span>}
         />
-        <div className={css.hint}>{t('export.encryptHint')}</div>
-        {encrypt && (
-          <div className={css.secretFields}>
-            <label className={css.field}>
-              <span className={css.fieldLabel}>{t('export.password')}</span>
-              <input type="password" className={css.input} value={password} onChange={(e: ChangeEvent<HTMLInputElement>) => { setPassword(e.target.value) }} autoComplete="new-password" />
-            </label>
-            <label className={css.field}>
-              <span className={css.fieldLabel}>{t('export.passwordConfirm')}</span>
-              <input type="password" className={css.input} value={passwordConfirm} onChange={(e: ChangeEvent<HTMLInputElement>) => { setPasswordConfirm(e.target.value) }} autoComplete="new-password" />
-            </label>
-            {password !== '' && password !== passwordConfirm && (
-              <span className={css.formError}>{t('export.passwordMismatch')}</span>
-            )}
-            {password === '' && encrypt && (
-              <span className={css.formError}>{t('export.passwordRequired')}</span>
-            )}
-          </div>
-        )}
         <Checkbox
           checked={includeSecrets}
           onChange={setIncludeSecrets}
           label={<span className={css.categoryName}>{t('export.includeSecrets')}</span>}
         />
-        <div className={css.hint}>{t('export.includeSecretsHint')}</div>
-      </Card>
+        <span className={css.statusSpacer} />
+      </div>
+      <div className={css.hint} style={{ marginBottom: 10 }}>
+        {encrypt ? t('export.encryptHint') : t('export.includeSecretsHint')}
+      </div>
+      {encrypt && (
+        <div className={css.secretFields}>
+          <label className={css.field} style={{ marginBottom: 0 }}>
+            <span className={css.fieldLabel}>{t('export.password')}</span>
+            <input type="password" className={css.input} value={password} onChange={(e: ChangeEvent<HTMLInputElement>) => { setPassword(e.target.value) }} autoComplete="new-password" />
+            {password === '' && <span className={css.formError}>{t('export.passwordRequired')}</span>}
+          </label>
+          <label className={css.field} style={{ marginBottom: 0 }}>
+            <span className={css.fieldLabel}>{t('export.passwordConfirm')}</span>
+            <input type="password" className={css.input} value={passwordConfirm} onChange={(e: ChangeEvent<HTMLInputElement>) => { setPasswordConfirm(e.target.value) }} autoComplete="new-password" />
+            {password !== '' && password !== passwordConfirm && <span className={css.formError}>{t('export.passwordMismatch')}</span>}
+          </label>
+        </div>
+      )}
 
-      {/* P0-④：自定义文件名 + 备注（可选）—— 缺省自动命名；文件名安全校验与 host 一致 */}
-      <Card className={css.optionsCard}>
-        <span className={css.optionsHeader}>{t('export.naming')}</span>
-        <label className={css.field}>
+      {/* 4. 命名行：文件名 + 备注（双列） */}
+      <div className={css.secretFields}>
+        <label className={css.field} style={{ marginBottom: 0 }}>
           <span className={css.fieldLabel}>{t('export.fileName')}</span>
           <input
             type="text"
@@ -297,14 +307,13 @@ export function ExportView({ api, t }: ExportViewProps) {
             placeholder="dsh-config-2026-08-24"
             onChange={(e: ChangeEvent<HTMLInputElement>) => { setFileName(e.target.value) }}
             onBlur={() => {
-              // 失焦自动补全 .zip 后缀（无需用户手动输入）——空值保持空（宿主自动命名）
+              // 失焦自动补全 .zip 后缀（空值保持空 = 宿主自动命名）
               if (fileName.trim() !== '') setFileName(normalizeExportFileName(fileName))
             }}
           />
-          <span className={css.hint}>{t('export.fileNameHint')}</span>
           {fileNameInvalid && <span className={css.formError}>{t('export.fileNameInvalid')}</span>}
         </label>
-        <label className={css.field}>
+        <label className={css.field} style={{ marginBottom: 0 }}>
           <span className={css.fieldLabel}>{t('export.note')}</span>
           <input
             type="text"
@@ -313,21 +322,10 @@ export function ExportView({ api, t }: ExportViewProps) {
             placeholder={t('export.notePlaceholder')}
             onChange={(e: ChangeEvent<HTMLInputElement>) => { setNote(e.target.value) }}
           />
-          <span className={css.hint}>{t('export.noteHint')}</span>
         </label>
-      </Card>
-
-      {/* 执行 */}
-      <div className={css.actionRow}>
-        <Button variant="ghost" disabled={running} onClick={() => { void runPreview() }}>
-          {preview?.loading === true ? <Spinner label={t('export.previewing')} /> : t('export.preview')}
-        </Button>
-        <Button variant="primary" disabled={running || passwordInvalid || fileNameInvalid} onClick={() => { void runExport() }}>
-          {running ? <Spinner label={t('export.running')} /> : t('export.run')}
-        </Button>
       </div>
 
-      {/* P2-⑫：导出前预览结果（「将打包 X 分区 / Y 条目 / 约 Z 大小」；零写入） */}
+      {/* P2-⑫：导出前预览结果（零写入） */}
       {preview !== null && !preview.loading && (
         <Banner kind={preview.error !== null ? 'error' : 'info'}>
           {preview.error !== null

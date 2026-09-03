@@ -24,6 +24,15 @@ import { redact } from '../security/redaction.ts';
 /** 高熵值形状（长 hex/base64/随机 id）：redact() 覆盖不了任意 secret，journal 级强脱敏补挡。 */
 const HIGH_ENTROPY_RE = /([A-Za-z0-9+/_=-]{28,})/g;
 
+/** 结构化时间戳/文件名形态：日期段必须由连字符连接（ISO 日期或紧凑时间戳）。
+ *  连字符不存在于 hex/base64 token 中，豁免不会误放行随机密钥。 */
+const DATE_STAMP_RE = /\d{4}-\d{2}-\d{2}|\d{8}-\d{6}/;
+
+/** 高熵长 token 掩码（日期戳形态豁免；回调逐个 run 判定，避免误伤文件名/时间戳）。 */
+function maskHighEntropy(text: string): string {
+  return text.replace(HIGH_ENTROPY_RE, (run) => (DATE_STAMP_RE.test(run) ? run : '[REDACTED]'));
+}
+
 /**
  * journal 专用文本脱敏（Security P1-1 / §29 已并入）：
  * 现有 redact()（结构字段 + 已知值形状）+ 高熵长 token 掩码。
@@ -32,8 +41,7 @@ const HIGH_ENTROPY_RE = /([A-Za-z0-9+/_=-]{28,})/g;
 export function redactJournalText(text: string): string {
   let out = text;
   try { out = redact(out); } catch { /* 脱敏失败保守处理 */ }
-  out = out.replace(HIGH_ENTROPY_RE, '[REDACTED]');
-  return out;
+  return maskHighEntropy(out);
 }
 
 // ---------- 常量 ----------

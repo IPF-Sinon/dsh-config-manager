@@ -857,11 +857,39 @@ export function SyncSettingsView({ api, t }: SyncSettingsViewProps) {
                 <Badge kind="ok">{t('webdav.passwordSaved')}</Badge>
               )}
             </div>
-            {remoteReady && (
-              <span className={css.hint}>
-                {t('channel.currentUrl')}：{state.channel === 'webdav' ? state.webdavUrl : state.repoUrl}
-              </span>
-            )}
+            {/* 状态事实行（Workbench：配置状态/上次同步/可同步分区——未配置时也要给硬事实） */}
+            <div className={css.factGrid} style={{ marginTop: 8 }}>
+              <div className={css.factCell}>
+                <span className={css.factLabel}>{t('syncStatus.state')}</span>
+                <span className={css.factValue}>
+                  {state.statusInfo?.configured === true ? t('channel.configured') : t('channel.notConfigured')}
+                </span>
+              </div>
+              <div className={css.factCell}>
+                <span className={css.factLabel}>{t('syncStatus.lastSync')}</span>
+                <span className={css.factValue}>
+                  {state.statusInfo?.lastSyncAt !== undefined
+                    ? new Date(state.statusInfo.lastSyncAt).toLocaleString()
+                    : '—'}
+                </span>
+              </div>
+              {state.statusInfo?.sectionCount !== undefined && (
+                <div className={css.factCell}>
+                  <span className={css.factLabel}>{t('syncStatus.sections')}</span>
+                  <span className={`${css.factValue} ${css.mono}`}>{String(state.statusInfo.sectionCount)}</span>
+                </div>
+              )}
+              {remoteReady && (
+                <div className={css.factCell} style={{ gridColumn: '1 / -1' }}>
+                  <span className={css.factLabel}>{t('channel.currentUrl')}</span>
+                  <span className={css.factValue}>
+                    <span className={css.mono}>
+                      {(state.channel === 'webdav' ? state.webdavUrl : state.repoUrl).slice(0, 60)}
+                    </span>
+                  </span>
+                </div>
+              )}
+            </div>
             <div className={css.actionRow}>
               <Button variant="primary" onClick={openChannelDialog}>
                 {t('channel.open')}

@@ -155,6 +155,15 @@ const defaultIo: MigrationIo = {
 /** journal 级高熵长 token 掩码（复用 journal 语义，独立实现避免跨层依赖）。 */
 const HIGH_ENTROPY_RE = /([A-Za-z0-9+/_=-]{28,})/g;
 
+/** 结构化时间戳/文件名形态：日期段必须由连字符连接（ISO 日期 YYYY-MM-DD 或
+ *  紧凑时间戳 YYYYMMDD-HHMMSS）。连字符不存在于 hex/base64 token 中，豁免不会误放行随机密钥。 */
+const DATE_STAMP_RE = /\d{4}-\d{2}-\d{2}|\d{8}-\d{6}/;
+
+/** 高熵长 token 掩码（日期戳形态豁免）。 */
+function maskHighEntropy(text: string): string {
+  return text.replace(HIGH_ENTROPY_RE, (run) => (DATE_STAMP_RE.test(run) ? run : '[REDACTED]'));
+}
+
 /**
  * 历史文本强脱敏：redact（结构化字段 + 已知值形状）+ 高熵长 token 掩码。
  * 用于 summary / error 等可能嵌入任意值的字段（REDACTED 不变量）。
@@ -162,8 +171,7 @@ const HIGH_ENTROPY_RE = /([A-Za-z0-9+/_=-]{28,})/g;
 export function redactHistoryText(text: string): string {
   let out = text;
   try { out = redact(out); } catch { /* 脱敏失败保守处理 */ }
-  out = out.replace(HIGH_ENTROPY_RE, '[REDACTED]');
-  return out;
+  return maskHighEntropy(out);
 }
 
 /**

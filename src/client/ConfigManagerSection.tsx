@@ -1,22 +1,29 @@
 /**
- * Config Manager 设置页（settings.section 入口的主页面容器）。
+ * Config Manager 设置页（settings.section 入口）—— Workbench Shell（2026-09 Full UI Rebuild）。
+ *
+ * 结构（画布 ≈ 564 × 720，800px 设置弹窗内）：
+ *   ┌ navStrip：总览 / 备份 / 导出 / 导入 / 同步 / 市场 / 档案 + 右侧图标动作（活动/关于）
+ *   ├ (SAFE MODE 横幅：仅恢复待处理时出现)
+ *   ├ shellMain：当前页面（pagePad 内边距，独立滚动）
+ *   └ statusBar：运行状态点 + 进行中任务数 + 版本信息
+ * 另有「活动与关于」右侧抽屉（活动记录 / 关于 两个子视图，moreSub 持久化）。
+ *
+ * IA（Workbench Rebuild）：export/import 升为一级页面；旧「更多」面板由抽屉取代
+ * （run-store parsePersistedState 将旧 panel 值迁移，moreSub 保留）。
  *
  * 业务面（api/syncApi/marketApi）由注册时的 inject face 注入；t 由 locale seat 注入。
- * 关闭按钮由 settings shell 自带，本页不再渲染。内部主视图：
- * 「导出与导入」一个顶层 tab（子 tab 切换 Export 导出备份 / Import 导入恢复），
- * 以及备份与快照/远程同步/配置市场/配置文件/关于 低频面板。
+ * 关闭按钮由 settings shell 自带，本页不再渲染。
  *
- * m2：主视图 tab（view）与全部子视图状态统一由模块级 runStore 持有
- * （sessionStorage 持久化 + 切 tab/关面板不重建控制器实例）；挂载时
+ * m2：主视图（panel/view）与全部子视图状态统一由模块级 runStore 持有
+ * （sessionStorage 持久化 + 切页/关面板不重建控制器实例）；挂载时
  * 经 GET /runs + 轮询 /progress 恢复进行中的 run（刷新/重开面板后）。
- * 低频面板的「当前打开面板」（panel）同样存于 runStore：切 tab 不丢、
- * 刷新后回到原 tab；面板内部状态由各自视图镜像进 store（见各视图头部注释）。
  */
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
-import type { KeyboardEvent, ReactNode } from 'react'
+import type { KeyboardEvent as ReactKeyboardEvent, ReactNode } from 'react'
 import type { PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
 import type { ConfigManagerSectionInjected, TranslateNS } from './client-types.ts'
-import { runStore, type MainView, type PanelId } from './run-store.ts'
+import type { ServiceStatus } from './api.ts'
+import { runStore, type PanelId } from './run-store.ts'
 import { OverviewPanel } from './overview/OverviewPanel.tsx'
 import { ExportView } from './export/ExportView.tsx'
 import { ImportWizardView } from './import/ImportWizardView.tsx'
@@ -29,7 +36,7 @@ import { RecoveryPanel } from './recovery/RecoveryPanel.tsx'
 import { HistoryPanel } from './history/HistoryPanel.tsx'
 import { toRecoveryView } from './recovery/recovery-view.ts'
 import { ConfirmDialog } from './common/ConfirmDialog.tsx'
-import { Banner, Button } from './common/ui.tsx'
+import { Banner, IconButton, Segmented, StatusDot } from './common/ui.tsx'
 import { evaluateStarPrompt } from '../ui/star-prompt.ts'
 import { evaluateReleaseNotesPrompt } from '../ui/release-notes-prompt.ts'
 import { ReleaseNotesDialog } from './about/ReleaseNotesDialog.tsx'
@@ -40,19 +47,49 @@ export type ConfigManagerSectionProps =
   & ConfigManagerSectionInjected
   & { t: TranslateNS<'config-manager'> }
 
+/** 导航页定义。 */
+interface NavItem {
+  id: PanelId
+  label: string
+}
+
+/** 一级导航（Workbench IA：7 页签；export/import 为独立页面）。 */
+const NAV_ITEMS: NavItem[] = [
+  { id: 'overview', label: 'nav.overview' },
+  { id: 'snapshots', label: 'nav.backups' },
+  { id: 'export', label: 'nav.export' },
+  { id: 'import', label: 'nav.import' },
+  { id: 'sync', label: 'nav.sync' },
+  { id: 'market', label: 'nav.market' },
+  { id: 'profiles', label: 'nav.profiles' },
+]
+
 /**
- * 设置页容器：「导出与导入」主视图（子 tab：导出备份 / 导入恢复）+ Snapshots /
- * Sync / Market / Profiles / About 五块低频面板。所有 tab（主视图 view + 低频
- * 面板 panel）状态都在模块级 store（切 tab/刷新不丢）；面板内部状态由各视图
- * 镜像进 store（Sync/Market/Snapshots/Profiles），敏感字段白名单剔除。
+ * Workbench Shell：导航条 + 页面内容 + 状态栏 + 活动抽屉。
  */
 export function ConfigManagerSection({ api, syncApi, syncT, marketApi, myConfigsApi, marketT, recoveryApi, recoveryT, historyApi, historyT, t }: ConfigManagerSectionProps) {
   const state = useSyncExternalStore(runStore.subscribe, runStore.getSnapshot)
-  const view = state.view
   const panel = state.panel
 
-  // m-star-prompt：Star 引导弹窗（挂载时判定一次，方案 A：满 3 天 + 未表态才弹；
-  // 点过「去点 Star」或「不再提示」后永久不再弹）。状态存 ui-prefs.json（Host 侧）。
+  /* ---------------- 活动与关于抽屉（drawerOpen 本地瞬态；子视图 moreSub 持久化） ---------------- */
+  const [drawerOpen, setDrawerOpen] = useState(false)
+  const openDrawer = (sub: 'history' | 'about'): void => {
+    runStore.patch({ more: { moreSub: sub } })
+    setDrawerOpen(true)
+  }
+  const closeDrawer = (): void => { setDrawerOpen(false) }
+  /* ---------------- 状态栏版本（挂载时取一次；失败隐藏） ---------------- */
+  const [version, setVersion] = useState<ServiceStatus | null>(null)
+  useEffect(() => {
+    let cancelled = false
+    api.status().then(
+      (s) => { if (!cancelled) setVersion(s) },
+      () => { /* 版本信息失败不影响功能 */ },
+    )
+    return () => { cancelled = true }
+  }, [api])
+
+  /* ---------------- m-star-prompt：Star 引导弹窗（保持既有能力） ---------------- */
   const [starPromptOpen, setStarPromptOpen] = useState(false)
   /** 弹窗展示的 GitHub 仓库地址（GET /star-prompt 返回；不落 store） */
   const starRepoUrl = useRef('')
@@ -84,19 +121,17 @@ export function ConfigManagerSection({ api, syncApi, syncT, marketApi, myConfigs
     })()
   }, [api])
 
-  /** 去点 Star（方案 A）：打开仓库页 + 记 clicked（此后不再弹）。 */
+  /** 去点 Star：打开仓库页 + 记 clicked（此后不再弹）。 */
   const handleStar = (): void => {
     setStarPromptOpen(false)
     const url = starRepoUrl.current
     if (url !== '') {
-      // 与 AboutPanel 外链同模式：新标签页打开，noreferrer 不外泄来源
       const anchor = document.createElement('a')
       anchor.href = url
       anchor.target = '_blank'
       anchor.rel = 'noreferrer'
       anchor.click()
     }
-    // 记「引导完成」失败静默：最坏情况下次进入再弹一次
     void api.saveStarPrompt({ clicked: true }).catch(() => {})
   }
 
@@ -106,12 +141,12 @@ export function ConfigManagerSection({ api, syncApi, syncT, marketApi, myConfigs
     void api.saveStarPrompt({ dismissed: true }).catch(() => {})
   }
 
-  /** 遮罩点击 / Esc：只是暂时关闭，不记「不再提示」表态（下次进入再判）。 */
+  /** 遮罩点击 / Esc：只是暂时关闭，不记表态（下次进入再判）。 */
   const handleBackdropClose = (): void => {
     setStarPromptOpen(false)
   }
 
-  // 版本更新内容弹窗（检测到更新后自动跳出，支持「确认」与「永不提示」）
+  /* ---------------- 版本更新内容弹窗（保持既有能力） ---------------- */
   const [releaseNotesOpen, setReleaseNotesOpen] = useState(false)
   /** 当前运行的插件版本号（GET /release-notes-prompt 返回） */
   const releaseNotesCurrentVersion = useRef('')
@@ -158,8 +193,7 @@ export function ConfigManagerSection({ api, syncApi, syncT, marketApi, myConfigs
     handleReleaseNotesConfirm()
   }
 
-  // m2-resume：挂载时重新订阅进行中的 run（刷新 / 重开面板后服务端继续执行，
-  // 这里经 /runs 找回活跃 runId 再轮询 /progress）；卸载时停止轮询，重开再订阅。
+  /* ---------------- m2-resume：挂载时重新订阅进行中的 run ---------------- */
   useEffect(() => {
     void runStore.resume(api)
     return () => {
@@ -167,9 +201,7 @@ export function ConfigManagerSection({ api, syncApi, syncT, marketApi, myConfigs
     }
   }, [api])
 
-  // 全局 SAFE MODE 横幅（聚合优化后恢复并入「备份与快照」子 tab，需要跨 tab 的
-  // 可见兜底）：挂载时若 store 尚无 recovery status 则拉取一次，用于判定是否需要阻断。
-  // 纯导航兜底（只读状态 + 「去处理」入口），不改恢复判定/执行逻辑。
+  /* ---------------- 全局 SAFE MODE 状态（跨页面可见兜底） ---------------- */
   const recoveryStatus = state.recovery.status
   useEffect(() => {
     if (recoveryStatus !== null) return
@@ -184,45 +216,16 @@ export function ConfigManagerSection({ api, syncApi, syncT, marketApi, myConfigs
     ? (toRecoveryView(recoveryStatus).recoveryRequired === true)
     : false
 
-  /** 切到主视图（导出与导入）：清空低频面板，记录到 store（刷新恢复）。 */
-  const setView = (next: MainView): void => {
-    runStore.patch({ view: next, panel: null })
+  /* ---------------- 导航 ---------------- */
+  /** 切页（export/import 时同步 view 镜像字段，保持旧持久化语义）。 */
+  const goto = (id: PanelId): void => {
+    if (id === 'export') runStore.patch({ view: 'export', panel: 'export' })
+    else if (id === 'import') runStore.patch({ view: 'import', panel: 'import' })
+    else runStore.patch({ panel: id })
   }
-
-  /** 打开低频面板（snapshots/sync/market/profiles/more）：记录到 store（刷新恢复）。 */
-  const openPanel = (next: PanelId): void => {
-    runStore.patch({ panel: next })
-  }
-
-  /** 打开「更多」下的子视图（迁移历史 / 关于）：记录到 store（刷新恢复）。 */
-  const openMoreSub = (moreSub: 'history' | 'about'): void => {
-    runStore.patch({ more: { moreSub } })
-  }
-
-  /** 打开「备份与快照」面板并切到「恢复」子 tab（SAFE MODE 横幅入口）。 */
-  const openRecovery = (): void => {
-    runStore.patch({ panel: 'snapshots', snapshots: { subTab: 'recovery' } })
-  }
-
-  /** 顶层 tab：主视图「导出与导入」激活 = panel 为空（view 是内部子 tab 状态） */
-  const transferActive = panel === null
-
-  /**
-   * 顶层 tab 模型（2026-09 UX 重构：总览为第一 tab 且默认打开）。
-   * id 'transfer' 特殊：激活条件 = panel === null（其内部子 tab 状态存 view）。
-   */
-  const tabs: { id: PanelId | 'transfer'; label: string; active: boolean; activate: () => void }[] = [
-    { id: 'overview', label: t('view.overview'), active: panel === 'overview', activate: () => { openPanel('overview') } },
-    { id: 'transfer', label: t('view.transfer'), active: transferActive, activate: () => { setView(view) } },
-    { id: 'snapshots', label: t('view.snapshots'), active: panel === 'snapshots', activate: () => { openPanel('snapshots') } },
-    { id: 'sync', label: t('view.sync'), active: panel === 'sync', activate: () => { openPanel('sync') } },
-    { id: 'market', label: t('view.market'), active: panel === 'market', activate: () => { openPanel('market') } },
-    { id: 'profiles', label: t('view.profiles'), active: panel === 'profiles', activate: () => { openPanel('profiles') } },
-    { id: 'more', label: t('view.more'), active: panel === 'more', activate: () => { openPanel('more') } },
-  ]
 
   /** tablist 方向键导航（ARIA tabs，manual activation）：←/→ 移动焦点，Enter/Space 原生激活。 */
-  const onTablistKeyDown = (event: KeyboardEvent<HTMLDivElement>): void => {
+  const onTablistKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>): void => {
     if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return
     const container = event.currentTarget
     const buttons = Array.from(container.querySelectorAll<HTMLButtonElement>('[role="tab"]'))
@@ -237,105 +240,166 @@ export function ConfigManagerSection({ api, syncApi, syncT, marketApi, myConfigs
     }
   }
 
+  /* ---------------- 状态栏数据 ---------------- */
+  const runningCount =
+    (state.export.running ? 1 : 0)
+    + (state.import.running ? 1 : 0)
+    + (state.sync.busy !== null ? 1 : 0)
+    + (state.snapshots.running ? 1 : 0)
+    + (state.recovery.running ? 1 : 0)
+  const statusKind: 'ok' | 'info' | 'error' = recoveryRequired
+    ? 'error'
+    : runningCount > 0 ? 'info' : 'ok'
+  const statusText = recoveryRequired
+    ? t('shell.status.recovery')
+    : runningCount > 0 ? t('shell.status.running', { count: String(runningCount) }) : t('shell.status.idle')
+
+  /** 当前页面内容（pagePad 统一内边距）。 */
+  let page: ReactNode
+  switch (panel) {
+    case 'overview':
+      page = <OverviewPanel api={api} syncApi={syncApi} historyApi={historyApi} t={t} openActivity={() => { openDrawer('history') }} />
+      break
+    case 'export':
+      page = <ExportView api={api} t={t} />
+      break
+    case 'import':
+      page = <ImportWizardView api={api} t={t} />
+      break
+    case 'snapshots':
+      page = <SnapshotsPanel api={api} t={t} recoveryApi={recoveryApi} recoveryT={recoveryT} />
+      break
+    case 'sync':
+      page = <SyncSettingsView api={syncApi} t={syncT} />
+      break
+    case 'market':
+      page = <MarketPanel api={marketApi} myConfigsApi={myConfigsApi} syncApi={syncApi} importApi={api} t={marketT} />
+      break
+    case 'profiles':
+      page = <ProfilesPanel api={api} t={t} />
+      break
+  }
+
   return (
     <div className={css.section}>
-      <div className={css.sectionHeader}>
-        <div className={css.viewTabs} role="tablist" onKeyDown={onTablistKeyDown}>
-          {tabs.map((tab) => (
+      {/* 顶部导航条：页签 + 图标动作 */}
+      <nav className={css.shellNav} aria-label={t('section.label')}>
+        <div className={css.navStrip} role="tablist" onKeyDown={onTablistKeyDown}>
+          {NAV_ITEMS.map((item) => (
             <button
-              key={tab.id}
+              key={item.id}
               type="button"
               role="tab"
-              aria-selected={tab.active}
-              data-active={tab.active ? '' : undefined}
-              className={css.viewTab}
-              onClick={tab.activate}
+              aria-selected={panel === item.id}
+              data-active={panel === item.id ? '' : undefined}
+              className={css.navTab}
+              onClick={() => { goto(item.id) }}
             >
-              {tab.label}
+              {item.id === 'snapshots' && recoveryRequired && <span className={css.navDot} aria-hidden="true" />}
+              {t(item.label as Parameters<TranslateNS<'config-manager'>>[0])}
             </button>
           ))}
         </div>
-      </div>
+        <div className={css.navActions}>
+          <button
+            type="button"
+            className={css.ghostButton}
+            data-size="sm"
+            data-active={drawerOpen && state.more.moreSub === 'history' ? '' : undefined}
+            onClick={() => { openDrawer('history') }}
+          >
+            <span aria-hidden="true">◷</span> {t('overview.nav.activity')}
+          </button>
+          <button
+            type="button"
+            className={css.ghostButton}
+            data-size="sm"
+            data-active={drawerOpen && state.more.moreSub === 'about' ? '' : undefined}
+            onClick={() => { openDrawer('about') }}
+          >
+            <span aria-hidden="true">ⓘ</span> {t('overview.nav.about')}
+          </button>
+        </div>
+      </nav>
 
-      {/* 全局 SAFE MODE 横幅（聚合优化后恢复并入「备份与快照」子 tab，跨 tab 可见兜底）：
-          有未解决恢复事项时，无论当前 tab 都提示并引导去处理。纯导航，不改判定逻辑。 */}
+      {/* 全局 SAFE MODE 横幅：有未解决恢复事项时，无论当前页面都提示并引导去处理 */}
       {recoveryRequired && (
-        <Banner kind="error">
-          {recoveryT('recovery.banner')}
-          <Button variant="primary" onClick={openRecovery}>{recoveryT('recovery.bannerAction')}</Button>
-        </Banner>
+        <div style={{ padding: '8px 12px 0' }}>
+          <Banner kind="error">
+            {recoveryT('recovery.banner')}
+            <button
+              type="button"
+              className={css.ghostButton}
+              data-size="sm"
+              onClick={() => {
+                runStore.patch({ panel: 'snapshots', snapshots: { subTab: 'recovery' } })
+              }}
+            >
+              {recoveryT('recovery.bannerAction')}
+            </button>
+          </Banner>
+        </div>
       )}
-      <div className={css.sectionBody}>
-        {panel === 'overview' ? (
-          <OverviewPanel api={api} syncApi={syncApi} historyApi={historyApi} t={t} />
-        ) : panel === 'more' ? (
-          <>
-            {/* 「更多」内部子 tab：迁移历史 / 关于（moreSub 镜像 runStore，切 tab/刷新不丢） */}
-            <div className={css.modeTabs} role="tablist">
-              <button
-                type="button"
-                role="tab"
-                aria-selected={state.more.moreSub === 'history'}
-                data-active={state.more.moreSub === 'history' ? '' : undefined}
-                className={css.modeTab}
-                onClick={() => { openMoreSub('history') }}
-              >
-                {historyT('view.history')}
-              </button>
-              <button
-                type="button"
-                role="tab"
-                aria-selected={state.more.moreSub === 'about'}
-                data-active={state.more.moreSub === 'about' ? '' : undefined}
-                className={css.modeTab}
-                onClick={() => { openMoreSub('about') }}
-              >
-                {t('view.about')}
-              </button>
+
+      {/* 页面主体（独立滚动） */}
+      <main className={css.shellMain}>
+        <div className={css.pagePad}>{page}</div>
+      </main>
+
+      {/* 底部状态栏：运行状态 + 版本 */}
+      <footer className={css.statusBar}>
+        <StatusDot kind={statusKind} pulse={runningCount > 0} />
+        <span className={css.statusText}>{statusText}</span>
+        <span className={css.statusSpacer} />
+        {version !== null && (
+          <span className={css.statusMeta}>
+            {t('shell.version', { plugin: version.pluginVersion, dsh: version.dshVersion })}
+          </span>
+        )}
+      </footer>
+
+      {/* 活动与关于抽屉（右侧滑出；活动记录 / 关于 两个子视图） */}
+      {drawerOpen && (
+        <>
+          <div className={css.drawerMask} onClick={closeDrawer} aria-hidden="true" />
+          <aside
+            className={css.drawerPanel}
+            role="dialog"
+            aria-modal="true"
+            aria-label={t('shell.drawer.title')}
+            onKeyDown={(e) => {
+              // Esc 仅在抽屉内消费（阻止冒泡，避免关闭宿主设置弹窗）
+              if (e.key === 'Escape') {
+                e.stopPropagation()
+                closeDrawer()
+              }
+            }}
+          >
+            <div className={css.drawerHeader}>
+              <span className={css.drawerTitle}>{t('shell.drawer.title')}</span>
+              <IconButton icon="✕" label={t('common.close')} onClick={closeDrawer} />
             </div>
-            {state.more.moreSub === 'history'
-              ? <HistoryPanel historyApi={historyApi} t={historyT} />
-              : <AboutPanel api={api} t={t} />}
-          </>
-        ) : panel === 'snapshots'
-          ? <SnapshotsPanel api={api} t={t} recoveryApi={recoveryApi} recoveryT={recoveryT} />
-          : panel === 'profiles'
-            ? <ProfilesPanel api={api} t={t} />
-            : panel === 'market'
-              ? <MarketPanel api={marketApi} myConfigsApi={myConfigsApi} syncApi={syncApi} importApi={api} t={marketT} />
-              : panel === 'sync'
-                ? <SyncSettingsView api={syncApi} t={syncT} />
-                : (
-                  <>
-                    {/* 「导出与导入」内部子 tab：导出备份 / 导入恢复（状态 = view，切 tab/刷新不丢） */}
-                    <div className={css.modeTabs} role="tablist">
-                      <button
-                        type="button"
-                        role="tab"
-                        aria-selected={view === 'export'}
-                        data-active={view === 'export' ? '' : undefined}
-                        className={css.modeTab}
-                        onClick={() => { setView('export') }}
-                      >
-                        {t('view.export')}
-                      </button>
-                      <button
-                        type="button"
-                        role="tab"
-                        aria-selected={view === 'import'}
-                        data-active={view === 'import' ? '' : undefined}
-                        className={css.modeTab}
-                        onClick={() => { setView('import') }}
-                      >
-                        {t('view.import')}
-                      </button>
-                    </div>
-                    {view === 'export' ? <ExportView api={api} t={t} /> : <ImportWizardView api={api} t={t} />}
-                  </>
-                )}
-      </div>
-      {/* Star 引导弹窗（复用 ConfirmDialog；「去点 Star」= primary 主操作，
-          「不再提示」= 次按钮；遮罩/Esc 走 backdropClose 只关不算表态） */}
+            <div style={{ padding: '10px 14px 0' }}>
+              <Segmented
+                items={[
+                  { id: 'history', label: historyT('view.history') },
+                  { id: 'about', label: t('view.about') },
+                ]}
+                active={state.more.moreSub}
+                onChange={(id) => { runStore.patch({ more: { moreSub: id === 'about' ? 'about' : 'history' } }) }}
+                ariaLabel={t('shell.drawer.title')}
+              />
+            </div>
+            <div className={css.drawerBody}>
+              {state.more.moreSub === 'history'
+                ? <HistoryPanel historyApi={historyApi} t={historyT} />
+                : <AboutPanel api={api} t={t} />}
+            </div>
+          </aside>
+        </>
+      )}
+
+      {/* Star 引导弹窗（「去点 Star」= primary 主操作，「不再提示」= 次按钮） */}
       <ConfirmDialog
         open={starPromptOpen}
         title={t('starPrompt.title')}
