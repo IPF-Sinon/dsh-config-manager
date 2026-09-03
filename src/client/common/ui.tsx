@@ -196,3 +196,41 @@ export function Checkbox({ checked, onChange, label, disabled }: CheckboxProps) 
     </label>
   )
 }
+
+/* ---------------- Stepper ---------------- */
+
+export type StepperStepState = 'done' | 'current' | 'todo'
+
+export interface StepperStep {
+  /** 步骤唯一 key（React list key）。 */
+  key: string
+  label: string
+  state: StepperStepState
+}
+
+export interface StepperProps {
+  steps: StepperStep[]
+  /** 可访问性说明（如「第 2 步，共 6 步」）；存在时容器带 role=group + aria-label */
+  ariaLabel?: string
+}
+
+/**
+ * 向导步骤条（只读指示器，非导航）：圆点（序号/✓）+ 连接线 + 标签。
+ * state 由调用方的纯函数模型给出（如 import-stepper.ts）；组件不做任何状态推断。
+ * current 圆点为 business 填充、done 为 success 淡底 ✓、todo 为中性描边序号。
+ */
+export function Stepper({ steps, ariaLabel }: StepperProps) {
+  return (
+    <div className={css.stepper} role={ariaLabel !== undefined ? 'group' : 'list'} aria-label={ariaLabel}>
+      {steps.map((step, i) => (
+        <span key={step.key} role="listitem" className={css.stepperStep} data-state={step.state}>
+          <span className={css.stepperDot} data-state={step.state} aria-hidden="true">
+            {step.state === 'done' ? '✓' : i + 1}
+          </span>
+          <span className={css.stepperLabel}>{step.label}</span>
+          {i < steps.length - 1 && <span className={css.stepperConnector} aria-hidden="true" />}
+        </span>
+      ))}
+    </div>
+  )
+}

@@ -2,7 +2,27 @@
  * Config Manager 设置页样式。全部颜色/字体/阴影走 DSH Design System 的
  * --dsw-* token（跟随活动主题：亮/暗与皮肤），不另造视觉体系。
  * 类名经 CSS Modules 哈希，不泄漏进 GUI 其他部分。
+ *
+ * 2026-09 UX 重构（DESIGN.md §9/§12 同步）：
+ *  - 键盘可见性：所有可交互元素统一 :focus-visible 双环（business 色 2px outline
+ *    + 2px offset，bg-layer-2 底衬保证亮暗主题对比度）；
+ *  - 交互过渡：hover/focus 底色与边框统一 120ms ease（快速克制，仅颜色属性）；
+ *  - 修复 dialogClose hover 引用不存在的 --dsw-alias-bg-hover（应为 interactive）。
  */
+
+/* 交互过渡统一参数（hover/focus 颜色过渡；不含位移动画） */
+.section :is(button, a, input, select, textarea, [role='tab']) {
+  transition-property: background-color, border-color, color;
+  transition-duration: 120ms;
+  transition-timing-function: ease;
+}
+
+/* 键盘焦点环：仅键盘导航（:focus-visible）触发，鼠标点击不画环。
+   outline 自动沿元素自身圆角绘制；offset 2px 保证与边框的间隙可辨。 */
+.section :is(button, a, input, select, textarea, [role='tab']):focus-visible {
+  outline: 2px solid var(--dsw-alias-state-business-primary);
+  outline-offset: 2px;
+}
 
 /* ---------------- section shell ---------------- */
 
@@ -28,7 +48,21 @@
   display: flex;
   gap: 2px;
   flex: 1;
+  min-width: 0;
   border-bottom: 1px solid var(--dsw-alias-border-l1);
+  /* 窄容器不横向溢出：tab 超宽时容器内滚动（细滚动条），下划线随内容滚动 */
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  scrollbar-width: thin;
+}
+
+.viewTabs::-webkit-scrollbar {
+  height: 4px;
+}
+
+.viewTabs::-webkit-scrollbar-thumb {
+  background: var(--dsw-alias-border-l2);
+  border-radius: 999px;
 }
 
 .viewTab {
@@ -377,8 +411,21 @@
 .modeTabs {
   display: flex;
   gap: 2px;
+  min-width: 0;
   border-bottom: 1px solid var(--dsw-alias-border-l1);
   flex: none;
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  scrollbar-width: thin;
+}
+
+.modeTabs::-webkit-scrollbar {
+  height: 4px;
+}
+
+.modeTabs::-webkit-scrollbar-thumb {
+  background: var(--dsw-alias-border-l2);
+  border-radius: 999px;
 }
 
 .modeTab {
@@ -512,6 +559,11 @@
   align-items: center;
   gap: 10px;
   flex-wrap: wrap;
+}
+
+/* 操作行内的右侧推齐（标题行「刷新」按钮等；不引入 inline style） */
+.pushRight {
+  margin-left: auto;
 }
 
 /* ---------------- 进度 ---------------- */
@@ -1442,7 +1494,7 @@
 
 .dialogClose:hover {
   color: var(--dsw-alias-label-primary);
-  background: var(--dsw-alias-bg-hover);
+  background: var(--dsw-alias-interactive-bg-hover);
 }
 
 /* ---------- Phase 6：迁移历史面板 ---------- */
@@ -1506,5 +1558,243 @@
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+/* ---------------- 总览（Overview，2026-09 UX 重构） ---------------- */
+
+/* 总览双列骨架：主列（状态指标 + 快速操作）+ 侧列（最近活动）。
+   无媒体查询纪律：auto-fit 自然收缩，窄容器自动单列（DESIGN.md §10）。 */
+.overviewColumns {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  gap: 12px;
+  align-items: start;
+}
+
+.overviewMain,
+.overviewSide {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+}
+
+/* 状态指标卡网格：auto-fit，窄容器自动换行 */
+.metricGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 8px;
+}
+
+/* 单个指标卡：Card 同 token 体系（layer-2 + l1 + 10px 圆角），紧凑 padding */
+.metricCard {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  padding: 10px 12px;
+  background: var(--dsw-alias-bg-layer-2);
+  border: 1px solid var(--dsw-alias-border-l1);
+  border-radius: 10px;
+}
+
+/* 指标主数字（新字号 20px/700，tabular-nums；登记 DESIGN.md §3.2） */
+.metricValue {
+  font-size: 20px;
+  font-weight: 700;
+  line-height: 1.2;
+  color: var(--dsw-alias-label-primary);
+  font-variant-numeric: tabular-nums;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.metricLabel {
+  font-size: 11.5px;
+  color: var(--dsw-alias-label-tertiary);
+  line-height: 1.5;
+}
+
+/* 指标附注（如「最近：3 分钟前」/定时备份开） */
+.metricMeta {
+  font-size: 11px;
+  color: var(--dsw-alias-label-secondary);
+  line-height: 1.5;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 快速操作按钮网格：纵向卡式按钮（符号 + 主标题 + 说明），与 .metricGrid 同节奏 */
+.quickActionGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 8px;
+}
+
+.quickAction {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  padding: 10px 12px;
+  text-align: left;
+  font-family: inherit;
+  font-size: 13px;
+  color: var(--dsw-alias-label-primary);
+  background: var(--dsw-alias-bg-layer-2);
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 8px;
+  cursor: pointer;
+  min-width: 0;
+}
+
+.quickAction:hover:not(:disabled) {
+  border-color: var(--dsw-alias-state-business-primary);
+  background: color-mix(in srgb, var(--dsw-alias-state-business-primary) 6%, var(--dsw-alias-bg-layer-2));
+}
+
+.quickAction:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* 快速操作主标题行（符号 + 文字），符号用 business 色 */
+.quickActionTitle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 600;
+  font-size: 13px;
+  color: var(--dsw-alias-label-primary);
+}
+
+.quickActionSymbol {
+  color: var(--dsw-alias-state-business-primary);
+  font-weight: 400;
+}
+
+.quickActionHint {
+  font-size: 11px;
+  color: var(--dsw-alias-label-tertiary);
+  line-height: 1.5;
+}
+
+/* 最近活动列表：时间 + 摘要 + 结果徽章 的三段行（minmax(0,…) + ellipsis 纪律） */
+.overviewList {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.overviewListItem {
+  display: grid;
+  grid-template-columns: minmax(0, auto) minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+  padding: 5px 8px;
+  border-radius: 6px;
+  font-size: 12px;
+}
+
+.overviewListItem:hover {
+  background: var(--dsw-alias-interactive-bg-hover);
+}
+
+.overviewListTime {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 11px;
+  color: var(--dsw-alias-label-tertiary);
+  white-space: nowrap;
+}
+
+.overviewListText {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--dsw-alias-label-primary);
+}
+
+/* ---------------- 向导步骤条 Stepper（2026-09 UX 重构，DESIGN.md §14 登记） ---------------- */
+
+/* 向导步骤条行：与 .viewBody 顶部对齐（padding 顶部 4px），不随内容滚动分离 */
+.wizardStepperRow {
+  padding: 4px 2px 0;
+  flex: none;
+}
+
+/* 步骤条容器：圆点 + 连接线 + 标签，单行排布；窄容器下标签可收缩截断 */
+.stepper {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  flex-wrap: wrap;
+  row-gap: 4px;
+}
+
+.stepperStep {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex: none;
+}
+
+/* 步骤圆点：18px；todo=中性描边 / current=business 填充白字 / done=success 淡底同色字 */
+.stepperDot {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  flex: none;
+  border-radius: 999px;
+  font-size: 10.5px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+  border: 1px solid var(--dsw-alias-border-l2);
+  color: var(--dsw-alias-label-tertiary);
+  background: transparent;
+}
+
+.stepperDot[data-state='current'] {
+  border-color: var(--dsw-alias-state-business-primary);
+  background: var(--dsw-alias-state-business-primary);
+  color: var(--dsw-alias-label-primary-foreground);
+}
+
+.stepperDot[data-state='done'] {
+  border-color: transparent;
+  background: color-mix(in srgb, var(--dsw-alias-state-success-primary) 16%, transparent);
+  color: var(--dsw-alias-state-success-primary);
+}
+
+.stepperLabel {
+  font-size: 11.5px;
+  color: var(--dsw-alias-label-tertiary);
+  white-space: nowrap;
+  /* 标签极短（2-4 字），不做 ellipsis 收缩——flex 压缩会把「选择」压成「选」；
+     超窄容器由 .stepper 的 flex-wrap 兜底换行 */
+  flex: none;
+}
+
+.stepperStep[data-state='current'] .stepperLabel {
+  font-weight: 600;
+  color: var(--dsw-alias-label-primary);
+}
+
+.stepperStep[data-state='done'] .stepperLabel {
+  color: var(--dsw-alias-label-secondary);
+}
+
+/* 步骤间连接线：细 1px 横线，随空间收缩 */
+.stepperConnector {
+  flex: 0 1 24px;
+  min-width: 8px;
+  height: 1px;
+  background: var(--dsw-alias-border-l1);
 }
 

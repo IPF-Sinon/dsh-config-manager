@@ -118,6 +118,7 @@ font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 | 副标题 `.sectionSubtitle` / 模式提示 `.modeHint` | 12px | 400 | line-height 1.5 |
 | 字段标签 `.fieldLabel` / 选项头 `.optionsHeader` | 12px | 600 | |
 | 正文 / 按钮 primary / 输入 `.section .viewTab .input .groupLabel 等` | 13px | 400（按钮 600） | 页面默认字号 13px |
+| 指标主数字 `.metricValue` | 20px | 700 | Overview 指标卡主数字，`tabular-nums`（2026-09 UX 重构登记） |
 | 次级按钮 `.ghostButton` / `.modeTab` | 12px | 400（激活 600） | |
 | 说明文字 `.hint` / 报告内 `.progressMeta` | 11.5px / 12px | 400 | line-height 1.5 |
 | 徽章 `.badge` | 11px | 400 | line-height 1.6，`font-variant-numeric: tabular-nums`（计数徽章） |
@@ -195,14 +196,17 @@ font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 
 ```
 css.section                    高 100%，纵向 flex，gap 10px
-├── .sectionHeader             横向 flex（含 .viewTabs 角色=tablist）
-│   └── .viewTabs / .viewTab   tab（导出与导入/备份与快照/远程同步/配置市场/配置文件/更多，下划线激活态）
+├── .sectionHeader             横向 flex（含 .viewTabs 角色=tablist；方向键 ←/→ 可在 tab 间移动焦点，
+│                              manual activation：Enter/Space 原生触发激活）
+│   └── .viewTabs / .viewTab   tab（总览/导出与导入/备份与快照/远程同步/配置市场/配置文件/更多，
+│                              下划线激活态；窄容器 overflow-x 内滚）
 │   └── (可选) 全局 SAFE MODE 横幅：有未解决恢复事项时跨 tab 显示（Banner kind=error + 「去处理」按钮）
 └── .sectionBody               flex:1 + overflow-y:auto（滚动发生在 section 内部）
     └── .viewBody              纵向 flex，gap 12px，padding 4px 2px 16px（各视图内容）
 ```
 
 - **Tab 激活态**：`data-active` + `border-bottom: 2px solid var(--dsw-alias-state-business-primary)` + 字重 600。
+- **默认页（2026-09 UX 重构）**：一级 tab 首位为「总览」（`panel:'overview'`），`defaultState` 默认打开；旧持久化载荷的「主视图」缺省值（panel 缺失/null）由 `parsePersistedState` 迁移为 `'overview'`。
 - **视图外滚动**：`sectionBody` 是唯一滚动容器；页面无需（也不应）设置 `height` 之外的滚动。
 - **「导出与导入」父子 tab**：导出备份与导入恢复合并为一个顶层 tab「导出与导入」（`view.transfer`），顶层激活态 = `panel === null`；内部用 `modeTabs`/`modeTab` 子 tab 切换「导出备份 / 导入恢复」（状态 = runStore `view`，切 tab/刷新不丢）。
 - **「备份与快照」父子 tab（含恢复）**：顶层 tab `panel==='snapshots'`。内部 `modeTabs` 子 tab「快照恢复 / 备份文件 / 恢复」（状态 = runStore `snapshots.subTab`，切 tab/刷新不丢）；「恢复」子 tab 渲染 RecoveryPanel（聚合优化：Phase 5 恢复并入，事故驱动，多数时间空态）。
@@ -306,7 +310,7 @@ css.section                    高 100%，纵向 flex，gap 10px
 - **关闭三途径**：遮罩点击（组件判定 `e.target === currentTarget`，卡片内点击不关闭）/ Esc 键 / 取消按钮；`busy` 时全部禁用；
 - **backdropClose（2026-08-22 扩展）**：遮罩点击 / Esc 走此回调而非 `onCancel`（缺省 = `onCancel`，现有调用方行为不变）——用于「不再提示」类弹窗（Star 引导），用户点遮罩/Esc 只是暂时关闭、**不算表态**，取消按钮（「不再提示」）才写持久化标记；
 - **busy 自管**：`onConfirm` 返回 Promise 时组件内部置 busy（防重复提交），完成后复位；`busy` prop 可外部强控；
-- **焦点**：打开后焦点落**取消**按钮（危险确认不默认落破坏性按钮）；关闭后还原到打开前的触发元素；不做完整 focus trap（两按钮场景风险可接受，本小节即登记）；
+- **焦点**：打开后焦点落**取消**按钮（危险确认不默认落破坏性按钮）；关闭后还原到打开前的触发元素；**完整 focus trap（2026-09 UX 重构升级）**：Tab/Shift+Tab 循环限制在卡片内可聚焦元素（disabled/隐藏元素跳过），焦点不泄漏到弹窗背后；
 - **样式**：仅 `dialogMask`（fixed 全屏 + `color-mix(bg-base 55%)` 遮罩）/ `dialogCard`（bg-layer-2 + border-l1 + radius10 + max-width 420 + 80vh 限高）/ `dialogHeader`（groupLabel 层级）/ `dialogBody`（240px 限高内滚 + flex 纵向排布 gap 10px，`white-space: pre-wrap`；message 与 children 之间 10px 间距）；确认按钮复用现有 `Button variant="danger"|"primary"`，零新按钮类；
 - **文案**：confirmLabel / cancelLabel / title / message 由调用方从 i18n 字典传入，组件不硬编码。
 
@@ -342,15 +346,17 @@ css.section                    高 100%，纵向 flex，gap 10px
 
 | 状态 | 规则 |
 |---|---|
-| hover | 可交互行/ghost/tab：`--dsw-alias-interactive-bg-hover`；primary：`--dsw-alias-button-info-hover`；danger：error 填充反色；卡片/报告**无 hover 效果** |
+| hover | 可交互行/ghost/tab：`--dsw-alias-interactive-bg-hover`；primary：`--dsw-alias-button-info-hover`；danger：error 填充反色；卡片/报告**无 hover 效果**；quickAction 卡 hover 转 business 描边 + 6% business 淡底 |
 | active | tab 激活：business 2px 下划线 + 600 字重；列表选中：business 边框 + 10% 淡底（`data-active`） |
-| focus | 输入类控件：`border-color: var(--dsw-alias-state-business-primary)`；按钮无自定义 focus ring（跟随宿主/浏览器默认） |
+| focus | **全站统一键盘焦点环（2026-09 UX 重构）**：所有可交互元素（button/a/input/select/textarea/`[role=tab]`）`:focus-visible` 时 `outline: 2px solid state-business-primary + offset 2px`（outline 沿元素圆角绘制；仅键盘导航触发，鼠标点击不画环）；输入类控件另有 focus 边框转 business 色 |
 | disabled | 按钮 0.45–0.5 opacity + `cursor: default` + 抑制 hover；输入 0.55 opacity；**进行中任务同时禁用关联操作按钮**（防重复启动 / 并发写入） |
 | loading | `Spinner`（按钮内联或独立行）；进行中任务其余操作按钮禁用 |
 | error | `ErrorBanner`（可操作）+ `formError`（行内校验）+ `banner[data-kind=error]`（简要） |
-| empty | `Empty` 占位（列表无数据、无冲突、无快照等），**不渲染空表头/空表格** |
+| empty | `Empty` 占位（列表无数据、无冲突、无快照等），**不渲染空表头/空表格**；Overview 另有首用引导卡（无备份且无快照时） |
 
 `data-active` 是项目统一的「选中/激活」标记属性（tab、快照行、表单模式），CSS 一律用 `[data-active]` 选择器命中。
+
+**交互过渡（2026-09 UX 重构）**：hover/focus 的颜色变化统一 `transition: background-color, border-color, color 120ms ease`（scope 到 `.section` 内全部可交互元素）；仅颜色属性、无位移动画（与 §12「快速克制」一致）。
 
 ---
 
@@ -360,7 +366,9 @@ css.section                    高 100%，纵向 flex，gap 10px
 - 响应机制：
   - 横向排布一律 `flex-wrap: wrap`（`.statRow` / `.actionRow` / `.groupHeader` / `.conflictHead` / `.conflictOptions`）；
   - 双列输入用 `repeat(auto-fit, minmax(180px, 1fr))`（窄到 180px 以下自动单列）；
-  - 快照 Grid 行用 `minmax()` 分栏，超窄时各列可压缩，长文本 `ellipsis` 截断。
+  - 快照 Grid 行用 `minmax()` 分栏，超窄时各列可压缩，长文本 `ellipsis` 截断；
+  - **一级/子 tab 栏（2026-09 UX 重构）**：`.viewTabs` / `.modeTabs` 加 `overflow-x: auto` + 细滚动条（4px thumb）——窄容器下 tab 超宽时容器内横向滚动，不再溢出页面；tab 本身 `white-space: nowrap` 保持单行；
+  - **Overview 骨架（2026-09 UX 重构）**：`.overviewColumns` 双列 `repeat(auto-fit, minmax(300px, 1fr))`、`.metricGrid` 卡片 `repeat(auto-fit, minmax(140px, 1fr))`、`.quickActionGrid` `repeat(auto-fit, minmax(150px, 1fr))`——窄容器自然降为单列/换行，无媒体查询。
 - **禁止**：手写固定像素宽度撑破容器、水平滚动（另有 `overflow-x` 需求必须走限高滚动容器规范）、在小屏隐藏核心功能（无 Mobile 专用分支）。
 
 ---
@@ -378,15 +386,16 @@ css.section                    高 100%，纵向 flex，gap 10px
 
 ## 12. Motion
 
-只存在三类动效，**禁止新增无意义动画**：
+只存在四类动效，**禁止新增无意义动画**：
 
 | 动效 | 参数 | 用于 |
 |---|---|---|
 | Spinner 旋转 | `dshCmSpin` 800ms linear infinite（rotate 360°） | 加载 / 进行中 |
 | 进度条不定态 | `dshCmIndeterminate` 1s ease-in-out infinite（40% 宽左右滑动） | 无百分比进度 |
 | 进度条宽度 | `transition: width 120ms linear` | 有百分比进度推进 |
+| hover/focus 颜色过渡 | `transition: background-color, border-color, color 120ms ease`（2026-09 UX 重构） | 全部可交互元素的 hover/focus 状态切换（仅颜色属性） |
 
-- 无 hover 过渡、无弹窗动画、无路由过渡（无路由）、无 skeleton 动画。
+- 无弹窗动画、无路由过渡（无路由）、无 skeleton 动画。
 - 页面出现 / tab 切换**无动画**（瞬时切换）。
 
 ---
@@ -441,6 +450,10 @@ css.section                    高 100%，纵向 flex，gap 10px
 | **变更明细分组 + 颜色（P2-⑬ 优化）** | 变更明细按用户视角分组并排序：**冲突（`kindTagError`，error 色）→ 变更/将写入（`kindTagInfo`，business 色）→ 路径映射需处理（`kindTagWarn`，warn 色）→ 已一致无需处理（`kindTagOk`，success 色）→ 其他**；每组 = 组标题（`groupLabel` + Badge 计数）+ `reportScroll` 限高列表（组内 `kindTag` 同色变体）；分组逻辑 = `src/ui/backup-inspect.ts` 的 `groupPlanItems(PlanItem[])` 纯函数（空组不渲染、条目总数不丢），**备份「查看/对比」弹窗（`inspectGroupedChanges`）与配置档案切换预览共用同一分组语义**；新增样式仅 kindTag 四个颜色变体 + `inspectGroup`（组间分隔线） | 备份文件「查看/对比」弹窗、配置档案切换预览 |
 | **迁移历史面板（History tab，Phase 6）** | 低频面板：`SectionTitle` + 统计徽章行（`statRow`：总数/成功 ok/失败 error/跳过 warn）+ 篡改警示（`Banner kind="warn"`，当 Host 返回 `corrupted`）+ 过滤/导出卡（`Card`：`groupLabel` + `actionRow` 内三个原生 `<select class="select">`（kind / 结果 / 时间范围）+ `input type="search"` 文本过滤 + 刷新 ghost + 「导出 JSON」「导出 Markdown」ghost 按钮）+ 分组列表（`Card` 内 `historyGroup`（组间 `border-top`）+ `historyScroll` 限高内滚（240px）+ 可收缩 ellipsis 行 `historyRow`：时间（等宽）→ 结果 Badge → 分区 → 摘要，hover interactive 底色）；空态 `Empty`；错误 `ErrorBanner`。纯渲染模型 `src/ui/history-model.ts`（node 可测），文案走独立 ns `config-manager-history`（zh/en）。**安全：summary/error 渲染前 `redact()` 兜底（存储已 sanitize 双保险）；kind/result/sections 为枚举常量无 secret 承载面**；新增样式仅 `historyGroup/historyScroll/historyRow/historyRowMain/historyTime/historySections/historySummary`（复用 token + 现有间距/圆角/限高 scroll 规范） | 「迁移历史」tab（Phase 6，migration-history） |
 | **迁移前咨询卡（Phase 7）** | `Card`：`SectionTitle`（「迁移前咨询」）+ `statRow` 徽章行（健康评分 `Badge`（verdict 语义：healthy→ok / needs-attention→warn / critical→error）+ 建议 `Badge`（proceed→ok / review→warn / block→error）+ 「只读分析」info Badge）+ 建议依据 `Banner`（verdict 同色，`groupLabel` + 触发项列表，渲染前 `redact()`）+ 将应用摘要 `statRow`（分区/项/冲突/风险 Badge）+ 评分维度 `consultScroll` 限高内滚（每维度 `consultDimension`：`statRow`（维度 label Badge + 分数 Badge）+ `reportList` 问题明细，组间 `border-top` 分隔）。纯渲染模型 `src/ui/migration-consult-view.ts`（node 可测），文案走 `ui/i18n.ts`（`consult.*` 键，zh/en）。**安全：所有展示文本渲染前 `redact()` 兜底（核心构造时已脱敏双保险）**；新增样式仅 `consultScroll/consultDimension`（复用 token + 现有限高 scroll 规范） | 导入向导预览步、快照恢复计划弹窗、配置档案切换预览、一键同步差异确认（Phase 7，migration-consult） |
+| **总览页 Overview（2026-09 UX 重构）** | 一级 tab 首位（`panel:'overview'`，默认打开）：`viewBody` 内 `actionRow`（`SectionTitle` + `pushRight` 刷新 ghost 按钮 + 加载 Spinner）+ 健康 `Banner`（ok/warn/error 三态判定）+ 首用引导卡（无备份且无快照）+ `.overviewColumns` 双列（auto-fit 300px）：主列 = `.metricGrid` 指标卡 ×4 + 快速操作卡 + 建议卡；侧列 = 最近活动卡（`.overviewList` 三段行：相对时间（等宽）+ 摘要（redact 后）+ 结果徽章）。数据 = 5 个只读 API `Promise.allSettled` 并行聚合（备份文件/快照/定时备份/同步状态/迁移历史），单项失败显示 '—' 占位不阻塞整页；纯渲染模型 `src/ui/overview-view.ts`（node 可测：指标/健康判定/建议/活动/相对时间/空态）；快速操作「立即备份」= `api.runBackupNow()`（宿主防重）+ 完成/失败 Badge 反馈 + 自动刷新，其余为纯导航（runStore patch 与 tab 点击同语义）。新增样式：`overviewColumns/overviewMain/overviewSide/metricGrid/metricCard/metricValue/metricLabel/metricMeta/quickActionGrid/quickAction/quickActionTitle/quickActionSymbol/quickActionHint/overviewList/overviewListItem/overviewListTime/overviewListText/pushRight` | 「总览」tab（overview） |
+| **指标卡 Metric（2026-09 UX 重构）** | `.metricCard`（Card 同 token 体系，紧凑 padding 10/12）：`metricValue`（20px/700 tabular-nums 主数字，或状态文案「开启/关闭」）+ `metricLabel`（11.5px tertiary）+ 可选 `metricMeta`（11px secondary 附注；`metaTone=warn` 时叠加 `.warnText`）；新字号 20px 已登记 §3.2 | 总览页指标区（`overview-view.ts` 的 `OverviewMetric`） |
+| **快速操作卡 QuickAction（2026-09 UX 重构）** | `.quickAction`：纵向卡式按钮（`quickActionTitle`：文本符号（business 色）+ 主标题 13px/600 + 进行中 Spinner；`quickActionHint`：11px tertiary 说明）+ `quickActionGrid` auto-fit 150px 网格；hover 转 business 描边 + `color-mix(business 6%, bg-layer-2)` 淡底；文本符号（▣⇥⇤⇅）即图标（§11 无图标库纪律） | 总览页快速操作 |
+| **向导步骤条 Stepper（2026-09 UX 重构）** | `common/ui.tsx` 新原语：圆点（序号；current=business 填充白字 / done=success 16% 淡底 ✓ / todo=中性描边）+ `stepperConnector` 连接线（flex 0 1 24px 收缩）+ `stepperLabel`（11.5px；current 600 primary / done secondary / todo tertiary；**标签 flex:none 不做 ellipsis**——超窄由容器 flex-wrap 兜底换行）；组件零状态推断，state 由调用方纯函数模型给出；`ariaLabel` 可选（role=group）；导入向导接入：外层 `ImportWizardView` 包装 `wizardStepperRow`（padding 4px 2px 0）+ 步骤条 + 原向导体（`ImportWizardBody` 零改动），阶段映射 = `src/ui/import-stepper.ts`（九步 ImportStep/FlowPhase → 用户视角 6 阶段 select→analyze→decide→confirm→execute→done，只前进纪律与 flow.ts 一致，node 可测），文案 `import.stage.*` | 导入向导全部步骤（发布向导等后续向导可复用） |
 
 ---
 

@@ -15,14 +15,15 @@
  *   防重复提交；
  * - 初始焦点在取消按钮（危险确认不默认落破坏性按钮）；关闭后还原焦点到触发按钮
  *   （open 前的 document.activeElement）；
- * - 不做完整 focus trap（两按钮场景风险可接受，DESIGN.md §8.11 已注明）。
+ * - 完整 focus trap（2026-09 UX 重构升级）：Tab/Shift+Tab 循环限制在卡片内可聚焦
+ *   元素（disabled/隐藏元素跳过），Tab 键不会泄漏到弹窗背后（DESIGN.md §8.11 更新）。
  *
  * 安全：message 由调用方传入（渲染前已 redact 兜底，与全站一致）；本组件不触碰任何凭据。
  * 样式：全部走 --dsw-* token（遮罩 color-mix 半透明、卡片 bg-layer-2 + border-l1），
  * 仅新增 dialogMask/dialogCard/dialogHeader/dialogBody 四个类（config-manager.module.css）。
  */
 import { useEffect, useRef, useState } from 'react'
-import type { ReactNode } from 'react'
+import type { KeyboardEvent as ReactKeyboardEvent, ReactNode } from 'react'
 import { Button, Spinner } from './ui.tsx'
 import css from '../config-manager.module.css'
 
@@ -65,8 +66,37 @@ export function ConfirmDialog({
   const prevFocus = useRef<Element | null>(null)
   /** 取消按钮 ref（初始焦点） */
   const cancelRef = useRef<HTMLButtonElement | null>(null)
+  /** 卡片 ref（focus trap 容器） */
+  const cardRef = useRef<HTMLDivElement | null>(null)
   /** 遮罩/Esc 关闭回调（缺省 = 取消按钮同一回调） */
   const handleBackdropClose = backdropClose ?? onCancel
+
+  /** Tab 循环：把焦点限制在卡片内可聚焦元素（focus trap）。 */
+  const onCardKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>): void => {
+    if (event.key !== 'Tab') return
+    const card = cardRef.current
+    if (card === null) return
+    const focusables = Array.from(
+      card.querySelectorAll<HTMLElement>(
+        'button:not([disabled]), a[href], input:not([disabled]):not([type="hidden"]), '
+        + 'select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
+      ),
+    ).filter((el) => el.offsetParent !== null)
+    if (focusables.length === 0) return
+    const first = focusables[0]!
+    const last = focusables[focusables.length - 1]!
+    const active = document.activeElement
+    const inside = active !== null && card.contains(active)
+    if (event.shiftKey) {
+      if (!inside || active === first) {
+        event.preventDefault()
+        last.focus()
+      }
+    } else if (!inside || active === last) {
+      event.preventDefault()
+      first.focus()
+    }
+  }
 
   // 打开时记录触发元素 + 焦点落到取消按钮；关闭时还原焦点
   useEffect(() => {
@@ -113,7 +143,14 @@ export function ConfirmDialog({
         if (e.target === e.currentTarget && !busy) handleBackdropClose()
       }}
     >
-      <div className={css.dialogCard} role="dialog" aria-modal="true" aria-label={title}>
+      <div
+        ref={cardRef}
+        className={css.dialogCard}
+        role="dialog"
+        aria-modal="true"
+        aria-label={title}
+        onKeyDown={onCardKeyDown}
+      >
         <div className={css.dialogHeader}>{title}</div>
         <div className={css.dialogBody}>
           {message !== undefined && message !== '' && <div>{message}</div>}

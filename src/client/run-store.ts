@@ -68,9 +68,11 @@ export type MainView = 'export' | 'import'
  * 设置页低频面板（ConfigManagerSection 的 tab；panel 非空时覆盖主视图）。
  * 聚合优化（UX 2026-08）：把「关于」与「迁移历史」收进「更多」作为子 tab，
  * 「恢复」并入「备份与快照」作为子 tab —— 一级 tab 从 8 收敛为 6。
- * 旧持久化值（about/history/recovery）由 parsePersistedState 迁移到新结构。
+ * UX 重构（2026-09）：新增 'overview' 总览面板并作为默认打开页；
+ * 旧持久化值（about/history/recovery）由 parsePersistedState 迁移到新结构，
+ * 旧「主视图」缺省值（panel 缺失/null，即导出与导入）迁移为 'overview'。
  */
-export type PanelId = 'snapshots' | 'sync' | 'market' | 'profiles' | 'more'
+export type PanelId = 'overview' | 'snapshots' | 'sync' | 'market' | 'profiles' | 'more'
 
 /** 导出模式。 */
 export type ExportMode = 'quick' | 'custom'
@@ -564,7 +566,8 @@ function defaultState(): StoreState {
   return {
     v: 1,
     view: 'export',
-    panel: null,
+    // UX 重构（2026-09）：默认打开总览页（panel:'overview'；导出与导入 = panel:null）
+    panel: 'overview',
     export: defaultExportState(),
     import: defaultImportState(),
     sync: defaultSyncState(),
@@ -767,14 +770,15 @@ export function parsePersistedState(raw: string): PersistedState | null {
   const exp = p['export']
   const imp = p['import']
   if (typeof exp !== 'object' || exp === null || typeof imp !== 'object' || imp === null) return null
-  // panel：旧载荷可能缺失 → null（回到主视图）；非法值 → null。
-  // 聚合优化（2026-08）旧值迁移：'about'/'history' → 'more' + 对应 moreSub；
+  // panel：旧载荷「主视图」缺省值（缺失/null/非法）→ 'overview'（UX 重构 2026-09 的
+  // 新默认页）。聚合优化（2026-08）旧值迁移：'about'/'history' → 'more' + 对应 moreSub；
   // 'recovery' → 'snapshots' + snapshots.subTab='recovery'。旧 8 tab 值在新结构下不丢状态。
   const rawPanel = p['panel']
   let panel: PanelId | null = null
   let moreSub: MoreStoreSlice['moreSub'] = 'about'
   let snapshotsSubTab: SnapshotsSubTab = 'restore'
   switch (rawPanel) {
+    case 'overview':
     case 'snapshots':
     case 'sync':
     case 'market':
@@ -795,7 +799,9 @@ export function parsePersistedState(raw: string): PersistedState | null {
       snapshotsSubTab = 'recovery'
       break
     default:
-      panel = null
+      // 旧「主视图」缺省值（null/缺失/非法）→ 'overview'（UX 重构 2026-09 新默认页：
+      // 升级后首次进入落在总览页，符合新 IA 的产品语义）
+      panel = 'overview'
       break
   }
   // sync/market/snapshots：旧载荷可能缺失 → 默认切片（字段级缺失由 applyPersisted 兜底）

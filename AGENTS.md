@@ -33,10 +33,11 @@ tests/ 集成测试(node --test)；docs/design/ 设计文档
 2. **React 壳只装配**（`src/client/` 组件只渲染+交互状态，模型来自 `src/ui/`）。
 
 ### 页面落位（src/client/）
-- 五 tab 容器：`index.ts` + `ConfigManagerSection.tsx`（Export/Import/Snapshots/Sync/Market）
-- 导出 `export/ExportView.tsx`；导入九步 `import/ImportWizardView.tsx`（+`ConflictList/PathMappingForm/import-file-select`）；快照 `snapshots/SnapshotsPanel.tsx`
+- 七 tab 容器：`index.ts` + `ConfigManagerSection.tsx`（Overview/Export/Import/Snapshots/Sync/Market/Profiles/More；tablist 支持方向键导航）；总览为默认首 tab（`panel:'overview'`，旧 panel 缺省值经 parsePersistedState 迁移）
+- 总览 `overview/OverviewPanel.tsx`（纯函数模型 `src/ui/overview-view.ts`：指标/健康判定/建议/最近活动/相对时间）
+- 导出 `export/ExportView.tsx`；导入九步 `import/ImportWizardView.tsx`（外层包装 Stepper 步骤条 + `ImportWizardBody` 本体；纯函数 `src/ui/import-stepper.ts`；+`ConflictList/PathMappingForm/import-file-select`）；快照 `snapshots/SnapshotsPanel.tsx`
 - 历史 `history/HistoryPanel.tsx`；同步 `sync/SyncSettingsView.tsx`(+`SyncConfirmView/SyncHistoryView/sync-view`)；市场 `market/MarketPanel.tsx`(+`MyConfigsView/my-configs-view/my-configs-api`)；咨询 `consult/ConsultCard.tsx`
-- 共享原语 **`common/ui.tsx`**（Button/Badge/Banner/Card/Spinner/Field/SectionTitle/Empty/Checkbox）+`common/ErrorBanner.tsx`/`ProgressBar.tsx`/`ReportView.tsx`
+- 共享原语 **`common/ui.tsx`**（Button/Badge/Banner/Card/Spinner/Field/SectionTitle/Empty/Checkbox/Stepper）+`common/ErrorBanner.tsx`/`ProgressBar.tsx`/`ReportView.tsx`/`ConfirmDialog.tsx`（含 focus trap）
 - 状态中枢 `run-store.ts`（模块级单例+sessionStorage 白名单）；数据访问 `api.ts`/`sync/sync-api.ts`/`market/market-api.ts`；文案字典 `locales.ts`/`sync-locales.ts`/`market-locales.ts`（zh 源/en 镜像）
 - 样式全在 `src/client/config-manager.module.css`
 

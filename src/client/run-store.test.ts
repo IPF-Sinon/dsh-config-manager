@@ -879,7 +879,7 @@ test('低频面板: 旧版 v1 载荷（无 panel/sync/market/snapshots 字段）
   const store = new RunStore({ storage })
   const st = store.getSnapshot()
   assert.equal(st.view, 'import')
-  assert.equal(st.panel, null, '旧载荷无 panel → 主视图')
+  assert.equal(st.panel, 'overview', '旧载荷无 panel（旧「主视图」缺省）→ 迁移为总览页（2026-09 新默认页）')
   assert.equal(st.sync.channel, 'git')
   assert.equal(st.sync.byChannel.git.syncSections.length, 0)
   assert.equal(st.sync.byChannel.webdav.syncMode, 'default', 'webdav 通道缺省')

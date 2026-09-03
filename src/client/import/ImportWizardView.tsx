@@ -30,6 +30,7 @@ import type { ChangeEvent } from 'react'
 import { useSyncExternalStore } from 'react'
 import { ConflictCollector } from '../../ui/conflict-view.ts'
 import { nextFlowPhase, type FlowPhase } from '../../ui/flow.ts'
+import { importStepperModel, type ImportStageKey } from '../../ui/import-stepper.ts'
 import { importNextSteps } from '../../ui/next-steps.ts'
 import type { ImportPreviewSummary } from '../../ui/types.ts'
 import type { ImportPlan, ImportResult } from '../../core/types.ts'
@@ -37,7 +38,7 @@ import type { ConsultReport } from '../../core/migration-consult.ts'
 import type { ConfigManagerApi, UploadResponse } from '../api.ts'
 import type { TranslateNS } from '../client-types.ts'
 import { runStore } from '../run-store.ts'
-import { Badge, Banner, Button, Card, Checkbox, Empty, SectionTitle, Spinner } from '../common/ui.tsx'
+import { Badge, Banner, Button, Card, Checkbox, Empty, SectionTitle, Spinner, Stepper } from '../common/ui.tsx'
 import { ErrorBanner, ErrorList } from '../common/ErrorBanner.tsx'
 import { ProgressBar } from '../common/ProgressBar.tsx'
 import { ReportView } from '../common/ReportView.tsx'
@@ -239,9 +240,10 @@ function NextStepsCard({ plan, result, t }: {
 }
 
 /**
- * 导入向导主视图。
+ * 导入向导主视图（内部体）：各步骤 early-return 的渲染链。
+ * 外层由 ImportWizardView 包装步骤条（Stepper），本体保持零改动。
  */
-export function ImportWizardView({ api, t }: ImportWizardViewProps) {
+function ImportWizardBody({ api, t }: ImportWizardViewProps) {
   // m2：状态统一来自模块级 store；控制器实例由 store 缓存复用（不重建）
   const state = useSyncExternalStore(runStore.subscribe, runStore.getSnapshot)
   const imp = state.import
@@ -883,4 +885,49 @@ export function ImportWizardView({ api, t }: ImportWizardViewProps) {
   }
 
   return null
+}
+
+/* ---------- 外层包装：向导步骤条（2026-09 UX 重构） ---------- */
+
+/** 阶段标签映射（import.stage.* 字典键；key 来自 import-stepper.ts 的 ImportStageKey）。 */
+function stageLabels(t: TranslateNS<'config-manager'>): Record<ImportStageKey, string> {
+  return {
+    select: t('import.stage.select'),
+    analyze: t('import.stage.analyze'),
+    decide: t('import.stage.decide'),
+    confirm: t('import.stage.confirm'),
+    execute: t('import.stage.execute'),
+    done: t('import.stage.done'),
+  }
+}
+
+/**
+ * 导入向导（外层包装）：顶部步骤条（用户视角 6 阶段：选择→分析→预览与决策→确认→执行→完成）
+ * + 原向导体（ImportWizardBody 零改动）。步骤条为只读指示器：跟随 wizard.step/phase
+ * 推进（映射纯函数 importStepperModel，node 单测覆盖），不提供点击跳转。
+ */
+export function ImportWizardView(props: ImportWizardViewProps) {
+  const { t } = props
+  const state = useSyncExternalStore(runStore.subscribe, runStore.getSnapshot)
+  const imp = state.import
+  // phase === 'preview' 时真实阶段看 step（select/analyzing/compatibility/preview/importing/result）；
+  // 其余 phase（decrypt-archive/conflicts/path-mapping/secrets/confirm）本身就是流程阶段。
+  const model = importStepperModel(imp.phase === 'preview' ? imp.step : imp.phase)
+  const labels = stageLabels(t)
+  const current = model.steps[model.index]!
+  return (
+    <>
+      <div className={css.wizardStepperRow}>
+        <Stepper
+          steps={model.steps.map((s) => ({ key: s.key, label: labels[s.key], state: s.state }))}
+          ariaLabel={t('import.stepper.label', {
+            current: model.index + 1,
+            total: model.steps.length,
+            label: labels[current.key],
+          })}
+        />
+      </div>
+      <ImportWizardBody {...props} />
+    </>
+  )
 }

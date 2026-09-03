@@ -13,9 +13,11 @@
  * 刷新后回到原 tab；面板内部状态由各自视图镜像进 store（见各视图头部注释）。
  */
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
+import type { KeyboardEvent, ReactNode } from 'react'
 import type { PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
 import type { ConfigManagerSectionInjected, TranslateNS } from './client-types.ts'
 import { runStore, type MainView, type PanelId } from './run-store.ts'
+import { OverviewPanel } from './overview/OverviewPanel.tsx'
 import { ExportView } from './export/ExportView.tsx'
 import { ImportWizardView } from './import/ImportWizardView.tsx'
 import { SnapshotsPanel } from './snapshots/SnapshotsPanel.tsx'
@@ -205,71 +207,53 @@ export function ConfigManagerSection({ api, syncApi, syncT, marketApi, myConfigs
   /** 顶层 tab：主视图「导出与导入」激活 = panel 为空（view 是内部子 tab 状态） */
   const transferActive = panel === null
 
+  /**
+   * 顶层 tab 模型（2026-09 UX 重构：总览为第一 tab 且默认打开）。
+   * id 'transfer' 特殊：激活条件 = panel === null（其内部子 tab 状态存 view）。
+   */
+  const tabs: { id: PanelId | 'transfer'; label: string; active: boolean; activate: () => void }[] = [
+    { id: 'overview', label: t('view.overview'), active: panel === 'overview', activate: () => { openPanel('overview') } },
+    { id: 'transfer', label: t('view.transfer'), active: transferActive, activate: () => { setView(view) } },
+    { id: 'snapshots', label: t('view.snapshots'), active: panel === 'snapshots', activate: () => { openPanel('snapshots') } },
+    { id: 'sync', label: t('view.sync'), active: panel === 'sync', activate: () => { openPanel('sync') } },
+    { id: 'market', label: t('view.market'), active: panel === 'market', activate: () => { openPanel('market') } },
+    { id: 'profiles', label: t('view.profiles'), active: panel === 'profiles', activate: () => { openPanel('profiles') } },
+    { id: 'more', label: t('view.more'), active: panel === 'more', activate: () => { openPanel('more') } },
+  ]
+
+  /** tablist 方向键导航（ARIA tabs，manual activation）：←/→ 移动焦点，Enter/Space 原生激活。 */
+  const onTablistKeyDown = (event: KeyboardEvent<HTMLDivElement>): void => {
+    if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return
+    const container = event.currentTarget
+    const buttons = Array.from(container.querySelectorAll<HTMLButtonElement>('[role="tab"]'))
+    if (buttons.length === 0) return
+    const currentIndex = buttons.indexOf(document.activeElement as HTMLButtonElement)
+    if (currentIndex < 0) return
+    const delta = event.key === 'ArrowRight' ? 1 : -1
+    const next = buttons[(currentIndex + delta + buttons.length) % buttons.length]
+    if (next !== undefined) {
+      event.preventDefault()
+      next.focus()
+    }
+  }
+
   return (
     <div className={css.section}>
       <div className={css.sectionHeader}>
-        <div className={css.viewTabs} role="tablist">
-          <button
-            type="button"
-            role="tab"
-            aria-selected={transferActive}
-            data-active={transferActive ? '' : undefined}
-            className={css.viewTab}
-            onClick={() => { setView(view) }}
-          >
-            {t('view.transfer')}
-          </button>
-          <button
-            type="button"
-            role="tab"
-            aria-selected={panel === 'snapshots'}
-            data-active={panel === 'snapshots' ? '' : undefined}
-            className={css.viewTab}
-            onClick={() => { openPanel('snapshots') }}
-          >
-            {t('view.snapshots')}
-          </button>
-          <button
-            type="button"
-            role="tab"
-            aria-selected={panel === 'sync'}
-            data-active={panel === 'sync' ? '' : undefined}
-            className={css.viewTab}
-            onClick={() => { openPanel('sync') }}
-          >
-            {t('view.sync')}
-          </button>
-          <button
-            type="button"
-            role="tab"
-            aria-selected={panel === 'market'}
-            data-active={panel === 'market' ? '' : undefined}
-            className={css.viewTab}
-            onClick={() => { openPanel('market') }}
-          >
-            {t('view.market')}
-          </button>
-          <button
-            type="button"
-            role="tab"
-            aria-selected={panel === 'profiles'}
-            data-active={panel === 'profiles' ? '' : undefined}
-            className={css.viewTab}
-            onClick={() => { openPanel('profiles') }}
-          >
-            {t('view.profiles')}
-          </button>
-          {/* 「更多」：低频面板（关于 / 迁移历史）收敛层级，减少一级 tab 拥挤 */}
-          <button
-            type="button"
-            role="tab"
-            aria-selected={panel === 'more'}
-            data-active={panel === 'more' ? '' : undefined}
-            className={css.viewTab}
-            onClick={() => { openPanel('more') }}
-          >
-            {t('view.more')}
-          </button>
+        <div className={css.viewTabs} role="tablist" onKeyDown={onTablistKeyDown}>
+          {tabs.map((tab) => (
+            <button
+              key={tab.id}
+              type="button"
+              role="tab"
+              aria-selected={tab.active}
+              data-active={tab.active ? '' : undefined}
+              className={css.viewTab}
+              onClick={tab.activate}
+            >
+              {tab.label}
+            </button>
+          ))}
         </div>
       </div>
 
@@ -282,7 +266,9 @@ export function ConfigManagerSection({ api, syncApi, syncT, marketApi, myConfigs
         </Banner>
       )}
       <div className={css.sectionBody}>
-        {panel === 'more' ? (
+        {panel === 'overview' ? (
+          <OverviewPanel api={api} syncApi={syncApi} historyApi={historyApi} t={t} />
+        ) : panel === 'more' ? (
           <>
             {/* 「更多」内部子 tab：迁移历史 / 关于（moreSub 镜像 runStore，切 tab/刷新不丢） */}
             <div className={css.modeTabs} role="tablist">
