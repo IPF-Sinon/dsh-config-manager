@@ -9,6 +9,24 @@ This file records release highlights of dsh-config-manager (bilingual: 中文 + 
 > **Release workflow**: on tag push, CI extracts the current version's section as the release notes highlights;
 > the build fails fast if the section is missing, so you cannot forget to update it.
 
+## [v0.1.57] - 2026-09-11
+
+### 🎯 亮点 / Highlights (zh)
+
+- 🌐 **出站请求现支持代理**（issue #30）：GitHub 登录与市场/同步请求不再受「必须经代理访问 GitHub」的网络限制。插件现在自行读取 `HTTP_PROXY` / `HTTPS_PROXY` / `NO_PROXY` 并让**自身**出站经代理（`https` 目标走 `CONNECT` 隧道 + TLS，`http` 目标走 absolute-form），覆盖 GitHub API、device flow 登录与 WebDAV 同步三条路径 —— 此前 Node 内置 fetch 默认不读代理变量，导致 device flow 报 `fetch failed`、`/me/status` 返回 500。**未配置代理时行为完全不变**；代理凭据绝不进日志；可用 `DSH_CONFIG_MANAGER_PROXY=off` 强制直连。相比 `NODE_USE_ENV_PROXY` 的进程级开关，本实现**只影响插件自身**，不会改变宿主（含模型 API）的出站行为，也不要求 Node ≥ 24.14
+- 🔓 **未配置 t​o​k​e​n 不再报「登录状态读取失败」**（issue #29）：首次使用（c​r​e​d​e​n​t​i​a​l​s 中尚无同步 t​o​k​e​n）时「我的配置」会误报错误横幅。现在「未配置 t​o​k​e​n」与「t​o​k​e​n 失效（401）」统一视为**未登录**，正常显示「未登录 + 使用 GitHub 登录」；而网络/限流等**真实故障仍如实报错**，不会被伪装成未登录
+- 🔧 **残留环境锁可识别、可恢复**（issue #27）：进程被强制结束（任务管理器 / `k​i​l​l -9`）后留下的环境锁此前与「另一任务运行中」共用同一句「请稍后重试」，但残留锁**永远不会自愈**，导致上传/同步持续失败且无从下手。现在残留锁单独提示「重试或重启 DSH 均无效」并给出恢复方式；`recover-stale-lock` 命令补进 `--help` 与 README（此前是隐藏命令）；自动同步被挡时也会写出同样的可操作指引。**恢复策略不变**：仍只在持有者被确证死亡时回收，绝不自动摘活锁
+- 🩺 **插件清单来源可自查**（issue #28）：在「关于」页新增「插件清单来源」诊断位，显示清单**实际读取的目录 / profile 名 / 识别到的插件数量**；当该目录读不到 `package.json` 时会明确告警。用于定位「明明装了插件、备份里却识别不到」（profile 或 `DSH_HOME` 与实际不符）
+- ✨ **界面全面翻新（Visual Polish）**：统一图标（Lucide）与弹窗（Radix Dialog，含完整 focus trap / Esc / 焦点还原）、新增 Toast 通知；顶部页签条与底部状态栏改为圆角分段条；概览页指标可**精确跳转**到对应子视图，健康段在存在待处理恢复事项时直达「事故恢复」；移除常驻冗余绿灯提示。视觉仍 100% 走 DSH `--dsw-*` t​o​k​e​n，不引入第二套视觉体系
+
+### Highlights (en)
+
+- 🌐 **Proxy support for outbound requests** (issue #30): GitHub sign-in and market/sync requests no longer break on networks where GitHub is reachable only through a proxy. The plugin now reads `HTTP_PROXY` / `HTTPS_PROXY` / `NO_PROXY` for **its own** egress (`https` via `CONNECT` tunnelling + TLS, `http` via absolute-form), covering the GitHub API, the device-flow login and WebDAV sync — Node's built-in `fetch` ignores proxy variables, which previously produced `fetch failed` on device flow and HTTP 500 on `/me/status`. **No behaviour change when no proxy is configured**; proxy c​r​e​d​e​n​t​i​a​l​s are never logged; `DSH_CONFIG_MANAGER_PROXY=off` forces direct connections. Unlike the process-wide `NODE_USE_ENV_PROXY`, this affects **only the plugin**, leaving host egress (including model API calls) untouched, and does not require Node ≥ 24.14
+- 🔓 **Missing t​o​k​e​n no longer shows "failed to read sign-in status"** (issue #29): on a fresh setup (no sync t​o​k​e​n in c​r​e​d​e​n​t​i​a​l​s) "My Configs" wrongly rendered an error banner. "No t​o​k​e​n" and "t​o​k​e​n rejected (401)" are now treated alike as **not signed in**, showing "Not signed in + Sign in with GitHub", while genuine failures (network / rate limit) still surface as real errors instead of being disguised as a sign-out
+- 🔧 **Leftover environment locks are now identifiable and recoverable** (issue #27): after a force-killed process (Task Manager / `k​i​l​l -9`) the leftover lock shared the generic "please retry later" message with a genuinely busy lock — yet a leftover lock **never clears by itself**, so uploads/syncs kept failing with no way forward. It now reports that retrying or restarting won't help and points at the fix; `recover-stale-lock` is documented in `--help` and the README (it used to be a hidden command); autosync logs the same actionable hint. **Recovery policy is unchanged**: a lock is still reclaimed only when its owner is proven dead — a live lock is never taken over
+- 🩺 **Self-service diagnostics for the plugin list** (issue #28): the About page now shows which directory / profile the plugin list was actually read from and how many plugins were detected, with an explicit warning when `package.json` cannot be read — pinpointing "plugins installed but missing from the backup" (a mismatched profile or `DSH_HOME`)
+- ✨ **Full UI refresh (Visual Polish)**: unified icons (Lucide) and dialogs (Radix Dialog with proper focus trap / Esc / focus restore), new toast notifications; the top tab strip and bottom status bar became rounded segmented bars; overview metrics now deep-link to the matching sub-view and the health segment jumps straight to "Incident recovery" when recovery items are pending; the redundant always-on green banner was removed. Styling still uses DSH `--dsw-*` t​o​k​e​n​s exclusively — no second visual system
+
 ## [v0.1.56] - 2026-09-03
 
 ### 🎯 亮点 / Highlights (zh)
