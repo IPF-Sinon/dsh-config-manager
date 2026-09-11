@@ -25,7 +25,10 @@ import type { TranslateNS } from '../client-types.ts'
 import type { RecoveryPort } from '../../ui/types.ts'
 import { RecoveryPanel } from '../recovery/RecoveryPanel.tsx'
 import { Badge, Banner, Button, Card, Checkbox, Empty, IconButton, Segmented, Spinner } from '../common/ui.tsx'
+import { toast } from '../common/toast-store.ts'
+import { SnapshotIcon, RefreshIcon, DownloadIcon, ImportIcon, InspectIcon, DeleteIcon, ClockIcon, PencilIcon, MessageIcon } from '../common/Icon.tsx'
 import { ConfirmDialog } from '../common/ConfirmDialog.tsx'
+import { Modal } from '../common/Modal.tsx'
 import { runStore, toSnapshotsStoreSlice, type SnapshotsStoreSlice, type SnapshotsSubTab } from '../run-store.ts'
 import type { BackupFileMeta } from '../../sync/backup-files.ts'
 import type { BackupInspectResult } from '../api.ts'
@@ -63,6 +66,9 @@ interface PanelState {
   plan: RestorePlan | null
   running: boolean
   report: RestoreReport | null
+  /** 仅承载「恢复计划（dry-run）加载失败」——渲染点在计划预览弹窗内。
+   *  其余动作失败（执行恢复/置顶/删除）走全局 Toast，绝不写这里：
+   *  那些动作发生时弹窗已关闭，写进来等于没有任何渲染点（曾经就是这样静默丢失的）。 */
   actionError: string | null
 }
 
@@ -259,10 +265,9 @@ export function SnapshotsPanel({ api, t, recoveryApi, recoveryT }: SnapshotsPane
     api.restoreSnapshot(state.selectedId, false).then(
       (res) => { patch({ running: false, report: res.report ?? null }) },
       (err) => {
-        patch({
-          running: false,
-          actionError: err instanceof Error ? err.message : String(err),
-        })
+        // 此时预览/确认弹窗都已关闭 → 用 Toast 送达（写入 panel state 将无任何渲染点）
+        patch({ running: false })
+        toast.error(err instanceof Error ? err.message : String(err))
       },
     ).finally(() => { runStore.stopRunWatch('restore') })
   }
@@ -299,7 +304,7 @@ export function SnapshotsPanel({ api, t, recoveryApi, recoveryT }: SnapshotsPane
       },
       (err) => {
         setManaging(false)
-        patch({ actionError: err instanceof Error ? err.message : String(err) })
+        toast.error(err instanceof Error ? err.message : String(err))
       },
     )
   }
@@ -313,16 +318,17 @@ export function SnapshotsPanel({ api, t, recoveryApi, recoveryT }: SnapshotsPane
       (res) => {
         setManaging(false)
         setDeleteTarget(null)
-        patch({ actionError: null })
         // 删除的是当前选中快照 → 清空选中与计划；无论如何都刷新列表
         if (state.selectedId === target.id) patch({ selectedId: null, plan: null, report: null })
+        // 不可恢复操作：明确回执
+        toast.ok(t('snapshots.deleted'))
         load()
         void res
       },
       (err) => {
         setManaging(false)
         setDeleteTarget(null)
-        patch({ actionError: err instanceof Error ? err.message : String(err) })
+        toast.error(err instanceof Error ? err.message : String(err))
       },
     )
   }
@@ -360,11 +366,13 @@ export function SnapshotsPanel({ api, t, recoveryApi, recoveryT }: SnapshotsPane
         />
         <span className={css.statusSpacer} />
         <IconButton
-          icon="⟳"
+          icon={<RefreshIcon size={14} />}
           label={t('overview.refresh')}
           onClick={() => {
+            // 手动刷新是显式动作：给回执（自动/挂载加载不打字提示，避免噪音）
             load()
             setBackupFilesTick((n) => n + 1)
+            toast.ok(t('toast.refreshed'))
           }}
         />
       </div>
@@ -396,7 +404,7 @@ export function SnapshotsPanel({ api, t, recoveryApi, recoveryT }: SnapshotsPane
           {state.status === 'ready' && state.metas.length === 0 && (
             /* 空态页：垂直居中 + 图形 + 双 CTA（立即备份 / 查看备份文件） */
             <div className={css.emptyHero}>
-              <span className={css.emptyHeroSymbol} aria-hidden="true">▣</span>
+              <span className={css.emptyHeroSymbol} aria-hidden="true"><SnapshotIcon size={28} /></span>
               <span className={css.emptyHeroTitle}>{t('snapshots.empty.title')}</span>
               <span className={css.emptyHeroBody}>{t('snapshots.empty.body')}</span>
               <div className={css.toolRow} style={{ justifyContent: 'center', marginBottom: 0 }}>
@@ -503,68 +511,57 @@ export function SnapshotsPanel({ api, t, recoveryApi, recoveryT }: SnapshotsPane
             </>
           )}
 
-          {/* 恢复计划预览弹窗：点击行即打开，loading/结果/错误都在弹窗内呈现 */}
-          {planOpen && (
-            <div
-              className={css.dialogMask}
-              onMouseDown={(e) => {
-                // busy（恢复执行中）时禁止关闭
-                if (e.target === e.currentTarget && !state.running) setPlanOpen(false)
-              }}
-            >
-              <div className={`${css.dialogCard} ${css.dialogWide}`} role="dialog" aria-modal="true" aria-label={t('snapshots.planTitle')}>
-                <div className={css.dialogHeaderRow}>
-                  <span className={css.dialogHeader}>{t('snapshots.planTitle')}</span>
-                  <button
-                    type="button"
-                    className={css.dialogClose}
-                    aria-label={t('common.close')}
-                    disabled={state.running}
-                    onClick={() => { setPlanOpen(false) }}
-                  >
-                    ×
-                  </button>
+          {/* 恢复计划预览弹窗：点击行即打开，loading/结果/错误都在弹窗内呈现（Radix Modal 统一 a11y） */}
+          <Modal
+            open={planOpen}
+            onClose={() => { setPlanOpen(false) }}
+            title={t('snapshots.planTitle')}
+            wide
+            busy={state.running}
+          >
+            <Modal.Header
+              title={t('snapshots.planTitle')}
+              onClose={() => { setPlanOpen(false) }}
+              closeDisabled={state.running}
+            />
+            <Modal.Body scroll>
+              <div className={css.hint}>{t('snapshots.selectHint')}</div>
+              {state.planning && <Spinner label={t('common.loading')} />}
+              {state.plan !== null && summary() !== '' && <div className={css.hint}>{summary()}</div>}
+              {state.plan !== null && state.plan.actions.length === 0 && (
+                <Empty>{t('snapshots.noActions')}</Empty>
+              )}
+              {state.plan !== null && state.plan.actions.length > 0 && (
+                <div className={css.planScroll}>
+                  <ul className={css.reportList}>
+                    {state.plan.actions.map((action, i) => (
+                      <li key={`plan-${i}`}>
+                        <span className={css.kindTag}>{actionKindLabel(t, action.kind)}</span>
+                        {' '}{action.description}
+                        {action.detail !== undefined && <span className={css.hint}>（{action.detail}）</span>}
+                      </li>
+                    ))}
+                  </ul>
                 </div>
-                <div className={css.dialogBodyScroll}>
-                  <div className={css.hint}>{t('snapshots.selectHint')}</div>
-                  {state.planning && <Spinner label={t('common.loading')} />}
-                  {state.plan !== null && summary() !== '' && <div className={css.hint}>{summary()}</div>}
-                  {state.plan !== null && state.plan.actions.length === 0 && (
-                    <Empty>{t('snapshots.noActions')}</Empty>
-                  )}
-                  {state.plan !== null && state.plan.actions.length > 0 && (
-                    <div className={css.planScroll}>
-                      <ul className={css.reportList}>
-                        {state.plan.actions.map((action, i) => (
-                          <li key={`plan-${i}`}>
-                            <span className={css.kindTag}>{actionKindLabel(t, action.kind)}</span>
-                            {' '}{action.description}
-                            {action.detail !== undefined && <span className={css.hint}>（{action.detail}）</span>}
-                          </li>
-                        ))}
-                      </ul>
-                    </div>
-                  )}
-                  {/* Phase 7 迁移前咨询卡（只读健康评分 + 建议） */}
-                  {consultLoading && <Spinner label={api.t('consult.loading')} />}
-                  {consultReport !== null && <ConsultCard report={consultReport} t={api.t} />}
-                  {state.actionError !== null && <Banner kind="error">{state.actionError}</Banner>}
-                  <div className={css.actionRow}>
-                    <Button disabled={state.running} onClick={() => { setPlanOpen(false) }}>
-                      {t('common.cancel')}
-                    </Button>
-                    <Button
-                      variant="danger"
-                      disabled={state.running || state.plan === null || state.plan.actions.every((a) => a.kind === 'skip')}
-                      onClick={requestExecute}
-                    >
-                      {state.running ? t('snapshots.executing') : t('snapshots.execute')}
-                    </Button>
-                  </div>
-                </div>
-              </div>
-            </div>
-          )}
+              )}
+              {/* Phase 7 迁移前咨询卡（只读健康评分 + 建议） */}
+              {consultLoading && <Spinner label={api.t('consult.loading')} />}
+              {consultReport !== null && <ConsultCard report={consultReport} t={api.t} />}
+              {state.actionError !== null && <Banner kind="error">{state.actionError}</Banner>}
+            </Modal.Body>
+            <Modal.Footer>
+              <Button disabled={state.running} onClick={() => { setPlanOpen(false) }}>
+                {t('common.cancel')}
+              </Button>
+              <Button
+                variant="danger"
+                disabled={state.running || state.plan === null || state.plan.actions.every((a) => a.kind === 'skip')}
+                onClick={requestExecute}
+              >
+                {state.running ? t('snapshots.executing') : t('snapshots.execute')}
+              </Button>
+            </Modal.Footer>
+          </Modal>
 
           {/* 执行恢复二次确认（破坏性操作；busy 防重复提交） */}
           <ConfirmDialog
@@ -661,8 +658,7 @@ function BackupScheduleCard({ api, t, onBackupDone }: {
   const [running, setRunning] = useState(false)
   const [lastRun, setLastRun] = useState<BackupRunStatus | undefined>(undefined)
   const [lastRunDetail, setLastRunDetail] = useState<string | null>(null)
-  const [flash, setFlash] = useState<string | null>(null)
-  const [actionError, setActionError] = useState<string | null>(null)
+  const [draftError, setDraftError] = useState<string | null>(null)
   /** 挂载守卫：切页卸载后异步回调只更新 store（草稿），不再 setState */
   const mountedRef = useRef(true)
 
@@ -704,12 +700,12 @@ function BackupScheduleCard({ api, t, onBackupDone }: {
     if (saving || running) return
     const parsed = validateBackupScheduleDraft(draft)
     if (!parsed.ok) {
-      setActionError(parsed.error)
+      // 表单内联校验：位置有语义（紧邻被校验的控件），保留就地提示而非 Toast
+      setDraftError(parsed.error)
       return
     }
     setSaving(true)
-    setFlash(null)
-    setActionError(null)
+    setDraftError(null)
     api.saveBackupSchedule(parsed.value).then(
       (schedule) => {
         // 宿主已保存：无论面板是否仍挂载都清 store 草稿（否则切回会显示陈旧未保存态）
@@ -724,12 +720,12 @@ function BackupScheduleCard({ api, t, onBackupDone }: {
         setLastRun(schedule.lastRunStatus)
         setLastRunDetail(formatRunTime(schedule.lastRunAt))
         setSaving(false)
-        setFlash(t('backupSchedule.saved'))
+        toast.ok(t('backupSchedule.saved'))
       },
       (err) => {
         if (!mountedRef.current) return
         setSaving(false)
-        setActionError(err instanceof Error ? err.message : String(err))
+        toast.error(err instanceof Error ? err.message : String(err))
       },
     )
   }
@@ -737,8 +733,7 @@ function BackupScheduleCard({ api, t, onBackupDone }: {
   const runNow = (): void => {
     if (running || saving) return
     setRunning(true)
-    setFlash(null)
-    setActionError(null)
+    setDraftError(null)
     api.runBackupNow().then(
       (res) => {
         if (mountedRef.current) {
@@ -755,7 +750,7 @@ function BackupScheduleCard({ api, t, onBackupDone }: {
       (err) => {
         if (!mountedRef.current) return
         setRunning(false)
-        setActionError(err instanceof Error ? err.message : String(err))
+        toast.error(err instanceof Error ? err.message : String(err))
       },
     )
   }
@@ -898,8 +893,7 @@ function BackupScheduleCard({ api, t, onBackupDone }: {
         </>
       )}
 
-      {flash !== null && <Banner kind="ok">{flash}</Banner>}
-      {actionError !== null && <Banner kind="error">{actionError}</Banner>}
+      {draftError !== null && <Banner kind="error">{draftError}</Banner>}
     </Card>
   )
 }
@@ -923,7 +917,6 @@ function BackupFilesCard({ api, t, refreshTick }: {
   const [files, setFiles] = useState<BackupFileMeta[]>([])
   const [deleting, setDeleting] = useState(false)
   const [confirmDelete, setConfirmDelete] = useState<BackupFileMeta | null>(null)
-  const [actionError, setActionError] = useState<string | null>(null)
   /** P0-④：备份文件名搜索（client 过滤；仅文件名 + 备注匹配） */
   const [search, setSearch] = useState('')
   /** P1-⑦/P2-⑬：查看/对比弹窗状态（非空时渲染；zipPath 为受控 exports 路径） */
@@ -972,10 +965,9 @@ function BackupFilesCard({ api, t, refreshTick }: {
     })
 
   const download = (file: BackupFileMeta): void => {
-    setActionError(null)
     void api.download(file.path, { saveDialog: true }).catch((err) => {
       if (!mountedRef.current) return
-      setActionError(err instanceof Error ? err.message : String(err))
+      toast.error(err instanceof Error ? err.message : String(err))
     })
   }
 
@@ -990,7 +982,6 @@ function BackupFilesCard({ api, t, refreshTick }: {
 
   /** P1-⑦/P2-⑬：查看备份内容 + 与此备份的差异（只读，零写入）。 */
   const inspectBackup = (file: BackupFileMeta): void => {
-    setActionError(null)
     setInspect({ name: file.name, loading: true, error: null, result: null })
     api.inspectBackup(file.path).then(
       (result) => {
@@ -1008,17 +999,18 @@ function BackupFilesCard({ api, t, refreshTick }: {
     const file = confirmDelete
     if (file === null || deleting) return
     setDeleting(true)
-    setActionError(null)
     api.deleteBackupFile(file.name).then(
       () => {
         setDeleting(false)
         setConfirmDelete(null)
+        // 不可恢复操作：明确回执
+        toast.ok(t('backupFiles.deleted', { name: file.name }))
         load()
       },
       (err) => {
         setDeleting(false)
         setConfirmDelete(null)
-        setActionError(err instanceof Error ? err.message : String(err))
+        toast.error(err instanceof Error ? err.message : String(err))
       },
     )
   }
@@ -1085,11 +1077,11 @@ function BackupFilesCard({ api, t, refreshTick }: {
                         <span className={`${css.cellTitle} ${css.mono}`} title={file.name}>{midEllipsis(file.name, 20)}</span>
                         <span className={css.cellMeta}>
                           <Badge kind={file.source === 'auto' ? 'info' : 'ok'} title={file.source === 'auto' ? t('backupFiles.source.auto') : t('backupFiles.source.manual')}>
-                            <span aria-hidden="true">{file.source === 'auto' ? '⏱' : '✎'}</span>
+                            {file.source === 'auto' ? <ClockIcon size={11} /> : <PencilIcon size={11} />}
                             {file.source === 'auto' ? t('backupFiles.source.auto') : t('backupFiles.source.manual')}
                           </Badge>
                           {file.note !== null && file.note !== undefined && file.note !== '' && (
-                            <span title={file.note}>💬 {noteText(file.note)}</span>
+                            <span className={css.cellMetaNote} title={file.note}><MessageIcon size={11} /><span className={css.cellMetaNoteText}>{noteText(file.note)}</span></span>
                           )}
                         </span>
                       </div>
@@ -1100,11 +1092,11 @@ function BackupFilesCard({ api, t, refreshTick }: {
                     </td>
                     <td className={css.cellActions}>
                       <span className={css.rowActions}>
-                        <IconButton icon="⭳" label={t('backupFiles.download')} disabled={deleting} onClick={() => { download(file) }} />
-                        <IconButton icon="⇤" label={t('backupFiles.import')} disabled={deleting} onClick={() => { importBackup(file) }} />
-                        <IconButton icon="⌕" label={t('backupFiles.inspect')} disabled={deleting} onClick={() => { inspectBackup(file) }} />
+                        <IconButton icon={<DownloadIcon size={14} />} label={t('backupFiles.download')} disabled={deleting} onClick={() => { download(file) }} />
+                        <IconButton icon={<ImportIcon size={14} />} label={t('backupFiles.import')} disabled={deleting} onClick={() => { importBackup(file) }} />
+                        <IconButton icon={<InspectIcon size={14} />} label={t('backupFiles.inspect')} disabled={deleting} onClick={() => { inspectBackup(file) }} />
                         <span className={css.rowDivider} aria-hidden="true" />
-                        <IconButton icon="✕" label={t('backupFiles.delete')} danger disabled={deleting} onClick={() => { setConfirmDelete(file) }} />
+                        <IconButton icon={<DeleteIcon size={14} />} label={t('backupFiles.delete')} danger disabled={deleting} onClick={() => { setConfirmDelete(file) }} />
                       </span>
                     </td>
                   </tr>
@@ -1115,8 +1107,6 @@ function BackupFilesCard({ api, t, refreshTick }: {
           {visibleFiles.length === 0 && <Empty>{t('backupFiles.searchEmpty')}</Empty>}
         </div>
       )}
-
-      {actionError !== null && <Banner kind="error">{actionError}</Banner>}
 
       {/* 删除二次确认（危险操作：备份文件不可恢复） */}
       <ConfirmDialog
@@ -1131,38 +1121,29 @@ function BackupFilesCard({ api, t, refreshTick }: {
         onCancel={() => { setConfirmDelete(null) }}
       />
 
-      {/* P1-⑦/P2-⑬：备份内容查看 / 与此备份的差异（只读弹窗，零写入） */}
-      {inspect !== null && (
-        <div
-          className={css.dialogMask}
-          onMouseDown={(e) => { if (e.target === e.currentTarget) setInspect(null) }}
-        >
-          <div className={`${css.dialogCard} ${css.dialogWide}`} role="dialog" aria-modal="true" aria-label={t('backupFiles.inspect')}>
-            <div className={css.dialogHeaderRow}>
-              <span className={css.dialogHeader}>{t('backupFiles.inspect')}</span>
-              <button
-                type="button"
-                className={css.dialogClose}
-                aria-label={t('common.close')}
-                onClick={() => { setInspect(null) }}
-              >
-                ×
-              </button>
-            </div>
-            <div className={css.dialogBodyScroll}>
-              <div className={css.hint} data-testid="inspect-backup-name">{inspect.name}</div>
-              {inspect.loading && <Spinner label={t('backupFiles.inspectLoading')} />}
-              {inspect.error !== null && <Banner kind="error">{inspect.error}</Banner>}
-              {!inspect.loading && inspect.result === null && inspect.error === null && (
-                <Empty>{t('backupFiles.inspectEmpty')}</Empty>
-              )}
-              {inspect.result !== null && (
-                <BackupInspectView result={inspect.result} t={t} />
-              )}
-            </div>
-          </div>
-        </div>
-      )}
+      {/* P1-⑦/P2-⑬：备份内容查看 / 与此备份的差异（只读弹窗，零写入；Radix Modal 统一 a11y） */}
+      <Modal
+        open={inspect !== null}
+        onClose={() => { setInspect(null) }}
+        title={t('backupFiles.inspect')}
+        wide
+      >
+        <Modal.Header
+          title={t('backupFiles.inspect')}
+          onClose={() => { setInspect(null) }}
+        />
+        <Modal.Body scroll>
+          {inspect !== null && <div className={css.hint} data-testid="inspect-backup-name">{inspect.name}</div>}
+          {inspect?.loading === true && <Spinner label={t('backupFiles.inspectLoading')} />}
+          {inspect?.error !== null && inspect?.error !== undefined && <Banner kind="error">{inspect.error}</Banner>}
+          {inspect !== null && !inspect.loading && inspect.result === null && inspect.error === null && (
+            <Empty>{t('backupFiles.inspectEmpty')}</Empty>
+          )}
+          {inspect?.result !== null && inspect?.result !== undefined && (
+            <BackupInspectView result={inspect.result} t={t} />
+          )}
+        </Modal.Body>
+      </Modal>
     </Card>
   )
 }

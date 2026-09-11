@@ -11,6 +11,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { TranslateNS } from '../client-types.ts'
 import { Badge, Banner, Button, Spinner } from '../common/ui.tsx'
+import { Modal } from '../common/Modal.tsx'
 import { ABOUT_META } from './about-view.ts'
 import {
   deriveReleasesUrl,
@@ -339,122 +340,109 @@ export function ReleaseNotesDialog({
     }
   }
 
-  if (!open) return null
-
   const releasesPageUrl = deriveReleasesUrl(repoUrl)
 
   return (
-    <div
-      className={css.dialogMask}
-      onClick={(e) => {
-        if (e.target === e.currentTarget) onClose()
-      }}
+    <Modal
+      open={open}
+      onClose={onClose}
+      title={t('about.releaseNotes.title')}
+      cardStyle={{ width: 'min(640px, 100%)', maxHeight: '85vh' }}
     >
-      <div
-        className={`${css.dialogCard} ${css.dialogWide}`}
-        style={{ width: 'min(640px, 100%)', maxHeight: '85vh' }}
+      {/* 头部：标题与关闭按钮 */}
+      <Modal.Header
+        title={t('about.releaseNotes.title')}
+        onClose={onClose}
+      />
+
+      {/* 正文可滚动区（支持下拉滚动加载更多） */}
+      <Modal.Body
+        scroll
+        innerRef={bodyRef}
+        onScroll={handleScroll}
+        style={{ maxHeight: '65vh', gap: '12px' }}
       >
-        {/* 头部：标题与关闭按钮 */}
-        <div className={css.dialogHeaderRow}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-            <span className={css.dialogHeader}>{t('about.releaseNotes.title')}</span>
+        {loading && (
+          <div style={{ padding: '24px 0', display: 'flex', justifyContent: 'center' }}>
+            <Spinner label={t('about.releaseNotes.loading')} />
           </div>
-          <button
-            type="button"
-            className={css.dialogClose}
-            onClick={onClose}
-            aria-label={t('common.close')}
+        )}
+
+        {error !== null && (
+          <div>
+            <Banner kind="error">{error}</Banner>
+            <div className={css.actionRow} style={{ marginTop: '8px' }}>
+              <Button onClick={() => { void loadFirstPage() }}>
+                {t('about.releaseNotes.retry')}
+              </Button>
+              <Button href={releasesPageUrl}>
+                {t('about.releaseNotes.viewOnGithub')}
+              </Button>
+            </div>
+          </div>
+        )}
+
+        {!loading && error === null && releases.length === 0 && (
+          <div style={{ padding: '20px 0', textAlign: 'center', color: 'var(--dsw-alias-label-secondary)' }}>
+            {t('about.releaseNotes.empty')}
+          </div>
+        )}
+
+        {!loading &&
+          releases.map((release, index) => (
+            <ReleaseCardView
+              key={release.id}
+              release={release}
+              isFirst={index === 0}
+              t={t}
+            />
+          ))}
+
+        {loadingMore && (
+          <div style={{ padding: '12px 0', display: 'flex', justifyContent: 'center' }}>
+            <Spinner label={t('about.releaseNotes.loadingMore')} />
+          </div>
+        )}
+
+        {!loading && !loadingMore && !hasMore && releases.length > 0 && (
+          <div
+            style={{
+              textAlign: 'center',
+              padding: '8px 0',
+              fontSize: '12px',
+              color: 'var(--dsw-alias-label-tertiary)',
+            }}
           >
-            ×
-          </button>
-        </div>
-
-        {/* 正文可滚动区（支持下拉滚动加载更多） */}
-        <div
-          ref={bodyRef}
-          className={css.dialogBodyScroll}
-          onScroll={handleScroll}
-          style={{ maxHeight: '65vh', gap: '12px' }}
-        >
-          {loading && (
-            <div style={{ padding: '24px 0', display: 'flex', justifyContent: 'center' }}>
-              <Spinner label={t('about.releaseNotes.loading')} />
-            </div>
-          )}
-
-          {error !== null && (
-            <div>
-              <Banner kind="error">{error}</Banner>
-              <div className={css.actionRow} style={{ marginTop: '8px' }}>
-                <Button onClick={() => { void loadFirstPage() }}>
-                  {t('about.releaseNotes.retry')}
-                </Button>
-                <Button href={releasesPageUrl}>
-                  {t('about.releaseNotes.viewOnGithub')}
-                </Button>
-              </div>
-            </div>
-          )}
-
-          {!loading && error === null && releases.length === 0 && (
-            <div style={{ padding: '20px 0', textAlign: 'center', color: 'var(--dsw-alias-label-secondary)' }}>
-              {t('about.releaseNotes.empty')}
-            </div>
-          )}
-
-          {!loading &&
-            releases.map((release, index) => (
-              <ReleaseCardView
-                key={release.id}
-                release={release}
-                isFirst={index === 0}
-                t={t}
-              />
-            ))}
-
-          {loadingMore && (
-            <div style={{ padding: '12px 0', display: 'flex', justifyContent: 'center' }}>
-              <Spinner label={t('about.releaseNotes.loadingMore')} />
-            </div>
-          )}
-
-          {!loading && !loadingMore && !hasMore && releases.length > 0 && (
-            <div
-              style={{
-                textAlign: 'center',
-                padding: '8px 0',
-                fontSize: '12px',
-                color: 'var(--dsw-alias-label-tertiary)',
-              }}
-            >
-              — {t('about.releaseNotes.allLoaded')} —
-            </div>
-          )}
-        </div>
-
-        {/* 底部按钮区 */}
-        <div
-          className={css.actionRow}
-          style={{
-            justifyContent: 'space-between',
-            alignItems: 'center',
-            borderTop: '1px solid var(--dsw-alias-border-l1)',
-            paddingTop: '10px',
-            flexWrap: 'wrap',
-            gap: '8px',
-          }}
-        >
-          <Button href={releasesPageUrl}>{t('about.releaseNotes.viewOnGithub')}</Button>
-          <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-            <Button onClick={handleNeverShow}>
-              {t('about.releaseNotes.neverShow')}
-            </Button>
-            <Button variant="primary" onClick={handleConfirm}>
-              {t('about.releaseNotes.confirm')}
-            </Button>
+            — {t('about.releaseNotes.allLoaded')} —
           </div>
+        )}
+      </Modal.Body>
+
+      {/* 底部按钮区 */}
+      <div
+        className={css.actionRow}
+        style={{
+          justifyContent: 'space-between',
+          alignItems: 'center',
+          borderTop: '1px solid var(--dsw-alias-border-l1)',
+          paddingTop: '10px',
+          paddingBottom: '14px',
+          paddingLeft: '16px',
+          paddingRight: '16px',
+          flexWrap: 'wrap',
+          gap: '8px',
+        }}
+      >
+        <Button href={releasesPageUrl}>{t('about.releaseNotes.viewOnGithub')}</Button>
+        <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+          <Button onClick={handleNeverShow}>
+            {t('about.releaseNotes.neverShow')}
+          </Button>
+          <Button variant="primary" onClick={handleConfirm}>
+            {t('about.releaseNotes.confirm')}
+          </Button>
         </div>
       </div>
-    </div>
+    </Modal>
   )
 }

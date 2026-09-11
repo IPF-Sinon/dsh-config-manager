@@ -28,19 +28,15 @@
  */
 import { redact } from '../security/redaction.ts';
 import { defaultFetcher } from '../utils/proxy.ts';
+// 官方收录目标常量抽到零依赖模块（client 半也要用；见 upstream.ts 注释：
+// 从本文件导入会把 node:https 拉进浏览器 bundle，导致插件加载失败）。
+// 同时 import（本文件内部要用）与 export（保持既有导入路径的向后兼容）。
+import { MARKET_UPSTREAM_OWNER, MARKET_UPSTREAM_REPO } from './upstream.ts';
+
+export { MARKET_UPSTREAM_OWNER, MARKET_UPSTREAM_REPO };
 
 /** GitHub REST API v3 基址 */
 export const GITHUB_API_BASE = 'https://api.github.com';
-
-/**
- * 官方收录目标仓库（产品决策 2026-08-20，docs/design/2026-08-20-my-configs-design.md §2.4）：
- * 收录 / PR 相关目标**固定**为 xiajiajun516/dsh-config-market，写死常量、界面不提供任何修改入口。
- * 与 src/market/builtin.ts 的内置市场为同一仓库（内置市场 URL 可经 env 覆盖仅用于浏览，
- * 收录目标不受 env 影响，恒为官方仓库）。
- */
-export const MARKET_UPSTREAM_OWNER = 'xiajiajun516';
-/** 官方收录目标仓库名（见 MARKET_UPSTREAM_OWNER） */
-export const MARKET_UPSTREAM_REPO = 'dsh-config-market';
 
 /** fork 异步创建轮询缺省间隔（毫秒）：后台收录模式下放宽粒度，减少 API 调用 */
 const DEFAULT_POLL_INTERVAL_MS = 5_000;

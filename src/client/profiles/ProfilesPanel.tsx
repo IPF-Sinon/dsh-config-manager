@@ -22,7 +22,9 @@ import type { TranslateNS } from '../client-types.ts'
 import { runStore, toProfilesStoreSlice, type ProfilesStoreSlice } from '../run-store.ts'
 import { Badge, Banner, Button, Card, Empty, SectionTitle, Spinner } from '../common/ui.tsx'
 import { ConfirmDialog } from '../common/ConfirmDialog.tsx'
+import { Modal } from '../common/Modal.tsx'
 import { ErrorBanner } from '../common/ErrorBanner.tsx'
+import { toast } from '../common/toast-store.ts'
 import { profileSwitchKind, summarizeSwitchPreview, validateProfileNameInput } from '../../ui/profiles-view.ts'
 import { groupPlanItems } from '../../ui/backup-inspect.ts'
 import type { InspectGroupKey } from '../../ui/backup-inspect.ts'
@@ -173,11 +175,12 @@ export function ProfilesPanel({ api, t }: ProfilesPanelProps) {
     api.profileSave(name).then(
       (meta) => {
         patch({ saving: false, saveName: '', actionError: null })
-        void meta
+        toast.ok(t('profiles.save.done', { name: meta.name }))
         load()
       },
       (err) => {
-        patch({ saving: false, actionError: err instanceof Error ? err.message : String(err) })
+        patch({ saving: false })
+        toast.error(err instanceof Error ? err.message : String(err))
       },
     )
   }
@@ -236,7 +239,8 @@ export function ProfilesPanel({ api, t }: ProfilesPanelProps) {
         load()
       },
       (err) => {
-        patch({ renaming: false, actionError: err instanceof Error ? err.message : String(err) })
+        patch({ renaming: false })
+        toast.error(err instanceof Error ? err.message : String(err))
       },
     )
   }
@@ -253,10 +257,13 @@ export function ProfilesPanel({ api, t }: ProfilesPanelProps) {
         if (stateRef.current.previewName === target.name) {
           patch({ previewName: null, preview: null, switchResult: null })
         }
+        // 不可恢复操作：明确回执（原先删完只有列表少一行，无任何确认）
+        toast.ok(t('profiles.delete.done', { name: target.name }))
         load()
       },
       (err) => {
-        patch({ deleting: false, actionError: err instanceof Error ? err.message : String(err) })
+        patch({ deleting: false })
+        toast.error(err instanceof Error ? err.message : String(err))
       },
     )
   }
@@ -271,16 +278,16 @@ export function ProfilesPanel({ api, t }: ProfilesPanelProps) {
         const stem = file.name.replace(/\.json$/i, '').trim() || 'imported'
         api.profileImport(content, stem).then(
           (meta) => {
-            void meta
+            toast.ok(t('profiles.import.done', { name: meta.name }))
             load()
           },
           (err) => {
-            patch({ importError: err instanceof Error ? err.message : String(err) })
+            toast.error(err instanceof Error ? err.message : String(err))
           },
         )
       },
       (err) => {
-        patch({ importError: err instanceof Error ? err.message : String(err) })
+        toast.error(err instanceof Error ? err.message : String(err))
       },
     )
   }
@@ -316,7 +323,6 @@ export function ProfilesPanel({ api, t }: ProfilesPanelProps) {
           </Button>
         </div>
         {saveInvalid && <span className={css.formError}>{t('profiles.nameInvalid')}</span>}
-        {state.actionError !== null && <Banner kind="error">{state.actionError}</Banner>}
       </Card>
 
       {/* —— Profile 列表 —— */}
@@ -384,57 +390,46 @@ export function ProfilesPanel({ api, t }: ProfilesPanelProps) {
             {t('profiles.import.choose')}
           </Button>
         </div>
-        {state.importError !== null && <Banner kind="error">{state.importError}</Banner>}
       </Card>
 
-      {/* —— 切换预览弹窗（只读 → 确认执行） —— */}
-      {(state.previewName !== null && (state.preview !== null || state.previewing || state.switchResult !== null))
-        && (
-          <div
-            className={css.dialogMask}
-            onMouseDown={(e) => { if (e.target === e.currentTarget && !state.switching) closePreview() }}
+      {/* —— 切换预览弹窗（只读 → 确认执行；Radix Modal 统一 a11y） —— */}
+      <Modal
+        open={state.previewName !== null && (state.preview !== null || state.previewing || state.switchResult !== null)}
+        onClose={closePreview}
+        title={t('profiles.switch')}
+        wide
+        busy={state.switching}
+      >
+        <Modal.Header
+          title={state.previewName !== null ? t('profiles.switchPreviewTitle', { name: state.previewName }) : t('profiles.switch')}
+          onClose={closePreview}
+          closeDisabled={state.switching}
+        />
+        <Modal.Body scroll>
+          {state.previewing && <Spinner label={t('profiles.previewing')} />}
+          {state.preview !== null && (
+            <SwitchPreviewCard preview={state.preview} t={t} />
+          )}
+          {/* Phase 7 迁移前咨询卡（只读健康评分 + 建议） */}
+          {consultLoading && <Spinner label={api.t('consult.loading')} />}
+          {consultReport !== null && <ConsultCard report={consultReport} t={api.t} />}
+          {state.switchResult !== null && (
+            <ProfileSwitchResultCard result={state.switchResult} t={t} />
+          )}
+        </Modal.Body>
+        <Modal.Footer>
+          <Button variant="ghost" disabled={state.switching} onClick={closePreview}>
+            {t('common.cancel')}
+          </Button>
+          <Button
+            variant="primary"
+            disabled={state.switching || state.preview === null || !state.preview.items.some((i) => i.kind !== 'Skip')}
+            onClick={doSwitch}
           >
-            <div className={`${css.dialogCard} ${css.dialogWide}`} role="dialog" aria-modal="true" aria-label={t('profiles.switch')}>
-              <div className={css.dialogHeaderRow}>
-                <span className={css.dialogHeader}>{t('profiles.switchPreviewTitle', { name: state.previewName })}</span>
-                <button
-                  type="button"
-                  className={css.dialogClose}
-                  aria-label={t('common.close')}
-                  disabled={state.switching}
-                  onClick={closePreview}
-                >
-                  ×
-                </button>
-              </div>
-              <div className={css.dialogBodyScroll}>
-                {state.previewing && <Spinner label={t('profiles.previewing')} />}
-                {state.preview !== null && (
-                  <SwitchPreviewCard preview={state.preview} t={t} />
-                )}
-                {/* Phase 7 迁移前咨询卡（只读健康评分 + 建议） */}
-                {consultLoading && <Spinner label={api.t('consult.loading')} />}
-                {consultReport !== null && <ConsultCard report={consultReport} t={api.t} />}
-                {state.switchResult !== null && (
-                  <ProfileSwitchResultCard result={state.switchResult} t={t} />
-                )}
-                <div className={css.actionRow}>
-                  <Button variant="ghost" disabled={state.switching} onClick={closePreview}>
-                    {t('common.cancel')}
-                  </Button>
-                  <Button
-                    variant="primary"
-                    disabled={state.switching || state.preview === null || !state.preview.items.some((i) => i.kind !== 'Skip')}
-                    onClick={doSwitch}
-                  >
-                    {state.switching ? <Spinner label={t('profiles.switching')} /> : t('profiles.switchConfirm')}
-                  </Button>
-                </div>
-                {state.actionError !== null && <Banner kind="error">{state.actionError}</Banner>}
-              </div>
-            </div>
-          </div>
-        )}
+            {state.switching ? <Spinner label={t('profiles.switching')} /> : t('profiles.switchConfirm')}
+          </Button>
+        </Modal.Footer>
+      </Modal>
 
       {/* —— 重命名弹窗 —— */}
       {state.renameTarget !== null && (
@@ -454,6 +449,8 @@ export function ProfilesPanel({ api, t }: ProfilesPanelProps) {
             value={state.renameValue}
             onChange={(e: ChangeEvent<HTMLInputElement>) => { patch({ renameValue: e.target.value }) }}
           />
+          {/* 表单内联校验：位置就地（原先渲染在页面级 Banner，被弹窗遮住而不可见） */}
+          {state.actionError !== null && <span className={css.formError}>{state.actionError}</span>}
         </ConfirmDialog>
       )}
 

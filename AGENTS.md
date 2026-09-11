@@ -9,7 +9,7 @@
 ## 📦 概览
 - 用途：DSH 配置的备份/导出/导入/迁移/远程同步/配置市场，双面 Cordis 插件。
 - 技术栈：TS 5.9（strict + `verbatimModuleSyntax` + `noUncheckedIndexedAccess`）、Node≥22（host）、React 18 + CSS Modules（web）、`node:test` 零依赖、tsdown + lightningcss 打包 client。
-- 样式：**CSS Modules 唯一样式表 `src/client/config-manager.module.css`**；颜色/字体/阴影全走 DSH `--dsw-*` 变量；**禁止 Tailwind/CSS-in-JS/Sass/UI 库/图标库/动画库**。
+- 样式：**CSS Modules 唯一样式表 `src/client/config-manager.module.css`**；颜色/字体/阴影全走 DSH `--dsw-*` 变量；**默认不引入 Tailwind/CSS-in-JS/Sass/UI 库/图标库/动画库**——确需追加时按下方「第三方 UI 库准入」流程评估后落地。
 
 ## 🗂️ 结构与分层
 ```
@@ -118,7 +118,7 @@ npm run bundle                   # 仅重建 client bundle
 1. 颜色/字体/阴影必走 `--dsw-*` token；**禁止 hardcode**(`#fff`等)，tint 用 `color-mix(in srgb, <token> <pct>%, transparent)`。
 2. 样式只能进 `src/client/config-manager.module.css`；禁止新增 css/内联 `<style>`/第三方 css；类名用 CSS Modules 引用(`css.xxx`)，**勿写字符串 class**(`sync-history-table` 属遗留)。
 3. 复用 `src/client/common/ui.tsx` 原语 + Common 的 `ErrorBanner/ErrorList/ProgressBar/ReportView`；已有公共组件能解决禁止重建，新页面先搜库。
-4. 不引入第二套视觉体系(Tailwind/CSS-in-JS/Sass/UI库/图标库/动画库)；图标用文本符号/emoji。
+4. **默认不引入第二套视觉体系**(Tailwind/CSS-in-JS/Sass/UI库/图标库/动画库)；图标默认用文本符号/emoji。确需追加第三方 UI 库时，按下方「第三方 UI 库准入」流程评估后落地。
 5. 按钮语义：`variant="primary"`(主操作)/默认 ghost(次)/`variant="danger"`(危险如恢复/回滚)；勿用 primary 做危险操作。
 6. 徽章：`Badge kind="ok|info|warn|error"` 与 `Banner` 四态一一对应；先想语义再选 kind。
 7. 文案走 i18n 字典；展示文本渲染前进 `redact()`。
@@ -133,6 +133,22 @@ npm run bundle                   # 仅重建 client bundle
 
 ### Existing UI Protection
 除非明确要求 redesign，否则最小范围修改(fix only asked)、保持既有视觉/交互/Pattern、不顺便改无关页面、与既有页面观感不一致时以既有为准。
+
+### 第三方 UI 库准入（按需追加）
+默认不引入第二套视觉体系；当现有原语(`common/ui.tsx`)和 DESIGN.md token 无法满足需求时，按以下流程评估后落地：
+
+1. **必要性**：确认 `common/*` → `src/ui/*` → `src/core/*` 无等价方案；能扩展先扩展(加 variant/props)。
+2. **Token 对齐**：库必须能消费 `--dsw-*` token（颜色/字体/阴影），不允许 hardcode；tint 仍走 `color-mix`。亮暗主题与皮肤切换下表现一致。
+3. **CSS 隔离**：优先 CSS Modules / CSS Variables / Shadow DOM；避免全局注入污染宿主样式。若库自带全局 css，必须在入口做 scope 包裹或 prefix。
+4. **体积评估**：tree-shakable 优先；bundle 增量需在 PR 描述中注明（`npm run bundle` 前后对比）。
+5. **依赖同步**：新增后同步更新 `package.json` + `package-lock.json`（两处+根对象版本）；peer/dev 区分清楚。
+6. **文档落位**：在 `DESIGN.md` 写入新 pattern / 组件用法 / token 映射表；在 `AGENTS.md` 本段记录库名与用途，避免重复引入。
+7. **验证**：`npm run typecheck && npm run build && npm test`；UI 自查覆盖 Hover/Focus/Disabled/Loading/Empty/Error + Dark Mode。
+
+> 图标库同理：默认文本符号/emoji；确需图标库时按上述流程评估，优先支持 SVG sprite / icon font 的按需加载形态。
+
+**已落地（2026-09 Visual Polish，按上述 7 步评估通过）**：
+- `lucide-react`（图标）+ `@radix-ui/react-dialog`（弹窗 a11y）——均为**无样式/行为级**原语，视觉仍走 `--dsw-*` token，不引入第二套视觉体系。运行时 dependencies；经 `tsdown.config.ts` 的 `deps.alwaysBundle` 打进单文件 cjs（否则运行时 require 命中 DSH loader module-table-miss 崩溃）。bundle +136KB raw / +30KB gzip。封装层 `common/Icon.tsx`、`common/Modal.tsx`；细节与未迁移弹窗清单见 `DESIGN.md §6`。
 
 ## ♻️ Reuse Before Creating
 新建任何 Component/Hook/Utility/Style/Type/API 前按序：①Reuse ②Extend ③Refactor ④Create。

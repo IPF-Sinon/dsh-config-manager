@@ -24,7 +24,8 @@ import type { HistoryApi, HistoryListResult } from '../history/history-api.ts'
 import type { ConfigManagerApi, ExportPreviewResponse } from '../api.ts'
 import type { TranslateNS } from '../client-types.ts'
 import { redact } from '../../security/redaction.ts'
-import { runStore } from '../run-store.ts'
+import { runStore, type SnapshotsSubTab } from '../run-store.ts'
+import { toast } from '../common/toast-store.ts'
 import { toRecoveryView } from '../recovery/recovery-view.ts'
 import { formatBytes } from '../../ui/report.ts'
 import {
@@ -36,6 +37,7 @@ import {
   type OverviewMetricKey,
 } from '../../ui/overview-view.ts'
 import { Badge, Button, Card, Spinner, StatusDot } from '../common/ui.tsx'
+import { BackupIcon, ExportIcon, ImportIcon, SyncIcon, ArrowRightIcon, CopyIcon } from '../common/Icon.tsx'
 import css from '../config-manager.module.css'
 
 export interface OverviewPanelProps {
@@ -67,12 +69,13 @@ const initialData: OverviewData = {
   sections: null,
 }
 
-/** 指标段点击直达页。 */
-const METRIC_TARGET: Record<OverviewMetricKey, 'snapshots' | 'sync'> = {
-  backups: 'snapshots',
-  snapshots: 'snapshots',
-  schedule: 'snapshots',
-  sync: 'sync',
+/** 指标段点击直达页 —— 落到备份页时必须同时带上精确子视图，
+ *  否则「备份文件 / 安全快照 / 定时备份」三个指标会全部停在备份页默认子页上。 */
+const METRIC_TARGET: Record<OverviewMetricKey, { panel: 'snapshots' | 'sync'; subTab?: SnapshotsSubTab }> = {
+  backups: { panel: 'snapshots', subTab: 'files' },
+  snapshots: { panel: 'snapshots', subTab: 'restore' },
+  schedule: { panel: 'snapshots', subTab: 'schedule' },
+  sync: { panel: 'sync' },
 }
 
 /** 相对时间渲染（超 7 天回退绝对日期）。 */
@@ -146,12 +149,23 @@ function dirOf(path: string): string {
   return i > 0 ? path.slice(0, i) : path
 }
 
-/** 复制文本到剪贴板（best-effort；失败静默——展示文本本就可见）。 */
-function copyText(text: string): void {
+/**
+ * 复制文本到剪贴板，并以 Toast 反馈结果。
+ * （原先完全静默：用户无法确认是否复制成功——被复制的内容在界面上往往只显示截断形态。）
+ */
+function copyText(text: string, t: TranslateNS<'config-manager'>): void {
   try {
-    void navigator.clipboard?.writeText(text).catch(() => {})
+    const pending = navigator.clipboard?.writeText(text)
+    if (pending === undefined) {
+      toast.warn(t('toast.copyFailed'))
+      return
+    }
+    void pending.then(
+      () => { toast.ok(t('toast.copied')) },
+      () => { toast.warn(t('toast.copyFailed')) },
+    )
   } catch {
-    /* 剪贴板不可用：静默 */
+    toast.warn(t('toast.copyFailed'))
   }
 }
 
@@ -163,8 +177,6 @@ export function OverviewPanel({ api, syncApi, historyApi, t, openActivity }: Ove
   const [data, setData] = useState<OverviewData>(initialData)
   const [loading, setLoading] = useState(true)
   const [backupRunning, setBackupRunning] = useState(false)
-  /** 立即备份反馈（ok/error 文案；渲染前 redact()） */
-  const [backupFeedback, setBackupFeedback] = useState<{ kind: 'ok' | 'error'; text: string } | null>(null)
   /** 卸载后不再 setState（异步回调竞态防护） */
   const aliveRef = useRef(true)
   useEffect(() => () => { aliveRef.current = false }, [])
@@ -196,19 +208,18 @@ export function OverviewPanel({ api, syncApi, historyApi, t, openActivity }: Ove
     void load()
   }, [load])
 
-  /** 立即备份（宿主 RunRegistry 防重；反馈后刷新指标）。 */
+  /** 立即备份（宿主 RunRegistry 防重；反馈后刷新指标）。
+   *  反馈走全局 Toast：备份耗时较长，用户点完很可能已切到别的页面，
+   *  写入本组件 state 会随卸载一起丢失（以前就是被 aliveRef 竞态静默吞掉的）。 */
   const runBackupNow = async (): Promise<void> => {
     if (backupRunning) return
     setBackupRunning(true)
-    setBackupFeedback(null)
     try {
       await api.runBackupNow()
-      if (!aliveRef.current) return
-      setBackupFeedback({ kind: 'ok', text: t('overview.quick.backupDone') })
-      void load()
+      toast.ok(t('overview.quick.backupDone'))
+      if (aliveRef.current) void load()
     } catch (err) {
-      if (!aliveRef.current) return
-      setBackupFeedback({ kind: 'error', text: redact(err instanceof Error ? err.message : String(err)) })
+      toast.error(redact(err instanceof Error ? err.message : String(err)))
     } finally {
       if (aliveRef.current) setBackupRunning(false)
     }
@@ -221,6 +232,24 @@ export function OverviewPanel({ api, syncApi, historyApi, t, openActivity }: Ove
     else runStore.patch({ panel })
   }
 
+  /** 指标段跳转：一次 patch 同时写入 page 与目标子视图（备份页 restore/files/schedule，同步页直达）。 */
+  const navMetric = (key: OverviewMetricKey): void => {
+    const target = METRIC_TARGET[key]
+    runStore.patch(target.subTab !== undefined
+      ? { panel: target.panel, snapshots: { subTab: target.subTab } }
+      : { panel: target.panel })
+  }
+
+  /** 健康段落点：有待处理恢复事项时直达备份页「事故恢复」子视图。 */
+  const navRecovery = (): void => {
+    runStore.patch({ panel: 'snapshots', snapshots: { subTab: 'recovery' } })
+  }
+
+  /** 是否存在待处理恢复事项（null = 状态未知；决定健康段是否作为「事故恢复」入口）。 */
+  const recoveryRequired = store.recovery.status !== null
+    ? toRecoveryView(store.recovery.status).recoveryRequired === true
+    : null
+
   const inputs = {
     now: Date.now(),
     backups: data.backups,
@@ -228,11 +257,10 @@ export function OverviewPanel({ api, syncApi, historyApi, t, openActivity }: Ove
     schedule: data.schedule,
     sync: data.sync,
     history: data.history?.entries ?? null,
-    recoveryRequired: store.recovery.status !== null
-      ? toRecoveryView(store.recovery.status).recoveryRequired === true
-      : null,
+    recoveryRequired,
     runningCount: 0,
   }
+
   const metrics = buildOverviewMetrics(inputs)
   const health = overviewHealth(inputs)
   const activity = overviewActivity(inputs.history, 30)
@@ -269,16 +297,29 @@ export function OverviewPanel({ api, syncApi, historyApi, t, openActivity }: Ove
     <div className={css.viewBody}>
       {/* 1. 状态条：健康点 + 指标段（可点击，名词在前） */}
       <div className={css.statStrip} data-tone={health.kind === 'ok' ? undefined : health.kind}>
-        <span className={css.statHealth}>
-          <StatusDot kind={health.kind === 'ok' ? 'ok' : health.kind === 'warn' ? 'warn' : 'error'} />
-          {t(`overview.${health.textKey}`)}
-        </span>
+        {recoveryRequired ? (
+          /* 有待处理恢复事项：健康段本身即入口，直达备份页「事故恢复」 */
+          <button
+            type="button"
+            className={`${css.statHealth} ${css.statHealthAction}`}
+            title={t('overview.health.recoveryAction')}
+            onClick={navRecovery}
+          >
+            <StatusDot kind="error" />
+            {t(`overview.${health.textKey}`)}
+          </button>
+        ) : (
+          <span className={css.statHealth}>
+            <StatusDot kind={health.kind === 'ok' ? 'ok' : health.kind === 'warn' ? 'warn' : 'error'} />
+            {t(`overview.${health.textKey}`)}
+          </span>
+        )}
         {segModels.map((seg) => (
           <button
             key={seg.key}
             type="button"
             className={css.statSeg}
-            onClick={() => { navPanel(METRIC_TARGET[seg.key]) }}
+            onClick={() => { navMetric(seg.key) }}
           >
             <span>{seg.label}</span>
             <b>{seg.value}</b>
@@ -291,21 +332,20 @@ export function OverviewPanel({ api, syncApi, historyApi, t, openActivity }: Ove
       {/* 2. 动作工具栏：立即备份（primary 执行）+ 导航 ghost + 右侧活动入口 */}
       <div className={css.toolRow}>
         <Button variant="primary" disabled={backupRunning} title={t('overview.quick.backupTitle')} onClick={() => { void runBackupNow() }}>
-          {backupRunning ? <Spinner /> : <span aria-hidden="true">▣</span>} {t('overview.quick.backup')}
+          {backupRunning ? <Spinner /> : <BackupIcon size={14} />} {t('overview.quick.backup')}
         </Button>
         <Button title={t('overview.quick.exportTitle')} onClick={() => { navPanel('export') }}>
-          <span aria-hidden="true">⇥</span> {t('nav.export')} ZIP
+          <ExportIcon size={14} /> {t('nav.export')} ZIP
         </Button>
         <Button title={t('overview.quick.importTitle')} onClick={() => { navPanel('import') }}>
-          <span aria-hidden="true">⇤</span> {t('nav.import')}
+          <ImportIcon size={14} /> {t('nav.import')}
         </Button>
         <Button title={t('overview.quick.syncTitle')} onClick={() => { navPanel('sync') }}>
-          <span aria-hidden="true">⇅</span> {t('overview.quick.sync')}
+          <SyncIcon size={14} /> {t('overview.quick.sync')}
         </Button>
-        {backupFeedback !== null && <Badge kind={backupFeedback.kind}>{backupFeedback.text}</Badge>}
         <span className={css.statusSpacer} />
         <Button size="sm" onClick={() => { openActivity?.() }}>
-          {t('overview.nav.activity')} <span aria-hidden="true">→</span>
+          {t('overview.nav.activity')} <ArrowRightIcon size={13} />
         </Button>
       </div>
 
@@ -339,9 +379,9 @@ export function OverviewPanel({ api, syncApi, historyApi, t, openActivity }: Ove
                       className={css.copyBtn}
                       aria-label={t('overview.activity.copy')}
                       title={t('overview.activity.copy')}
-                      onClick={() => { copyText(backupDir) }}
+                      onClick={() => { copyText(backupDir, t) }}
                     >
-                      ⧉
+                      <CopyIcon size={12} />
                     </button>
                   </span>
                 </div>
@@ -430,9 +470,9 @@ export function OverviewPanel({ api, syncApi, historyApi, t, openActivity }: Ove
                             className={css.copyBtn}
                             aria-label={t('overview.activity.copy')}
                             title={t('overview.activity.copy')}
-                            onClick={() => { copyText(item.summary) }}
+                            onClick={() => { copyText(item.summary, t) }}
                           >
-                            ⧉
+                            <CopyIcon size={12} />
                           </button>
                         </span>
                         <span className={css.activityBadge}>{resultNode(item.badge)}</span>

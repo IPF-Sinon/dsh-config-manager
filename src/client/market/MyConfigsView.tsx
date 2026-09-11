@@ -25,13 +25,15 @@ import { useEffect, useRef, useState } from 'react'
 import type { ChangeEvent, ReactNode } from 'react'
 import type { TranslateNS } from '../client-types.ts'
 import type { ConfigManagerApi } from '../api.ts'
-import { MARKET_UPSTREAM_OWNER, MARKET_UPSTREAM_REPO } from '../../market/github-repos.ts'
+import { MARKET_UPSTREAM_OWNER, MARKET_UPSTREAM_REPO } from '../../market/upstream.ts'
 import type { MarketApi } from './market-api.ts'
 import type { MyConfigsApi, MyItemEntry } from './my-configs-api.ts'
 import type { ListingStatusResponse } from '../../market/my-repo.ts'
 import type { SyncApi, GithubPollResponse } from '../sync/sync-api.ts'
 import { Badge, Banner, Button, Card, Checkbox, Empty, Field, SectionTitle, Spinner } from '../common/ui.tsx'
+import { Modal } from '../common/Modal.tsx'
 import { ConfirmDialog } from '../common/ConfirmDialog.tsx'
+import { toast } from '../common/toast-store.ts'
 import { redact } from '../../security/redaction.ts'
 import { computeGithubLoginView, githubPollMessage } from '../sync/sync-view.ts'
 import type { GithubLoginPhase } from '../sync/sync-view.ts'
@@ -136,6 +138,12 @@ export function MyConfigsView({
   const [install, setInstall] = useState<MyInstallState | null>(() => restoreMyInstall(myInstall))
   /** 最近一次 install 全量（commitInstall 读最新值，避免闭包过期） */
   const installRef = useRef<MyInstallState | null>(install)
+  /**
+   * K-07：未批准任何分区（表单内联校验，保留就地提示）。
+   * 与「下载/导入失败」分流：失败走全局 Toast（install.error 仅作失败标记，不再页内渲染），
+   * 本提示位置紧邻导入按钮，用户修正勾选后立即消失。
+   */
+  const [noApprovalHint, setNoApprovalHint] = useState(false)
   const fileInput = useRef<HTMLInputElement>(null)
 
   /* ---------------- 弹窗交互（2026-08-21：上传/装回本地搬进弹窗 + 免责前置） ---------------- */
@@ -300,6 +308,18 @@ export function MyConfigsView({
 
   /* ------------------------------------------------ GitHub device flow（复用 sync-view 模型） */
 
+  /**
+   * R-18：GitHub 流程失败统一出口「落状态 + 弹全局 Toast」，取代页内 error Banner。
+   * 注意文本**先 redact 再入 state**：状态行 Badge 由 computeGithubLoginView 直接把
+   * `github.error` 当 statusText 透出（该纯函数不做脱敏），先脱敏才能让 Badge 与 Toast
+   * 都不含敏感原文 —— 保持了原先 Banner 的 redact 安​全不变量。
+   */
+  const failGithub = (message: string): void => {
+    const safe = redact(message)
+    setGithub((g) => ({ ...g, phase: 'error', error: safe }))
+    toast.error(safe)
+  }
+
   const runGithubStart = async (): Promise<void> => {
     setGithub((g) => ({ ...g, phase: 'starting', error: null }))
     try {
@@ -314,7 +334,7 @@ export function MyConfigsView({
       })
       scheduleGithubPoll(info.flowId, Math.max(info.interval, 1) * 1000)
     } catch (err) {
-      setGithub((g) => ({ ...g, phase: 'error', error: err instanceof Error ? err.message : String(err) }))
+      failGithub(err instanceof Error ? err.message : String(err))
     }
   }
 
@@ -339,10 +359,10 @@ export function MyConfigsView({
         const s = await loadStatus()
         if (s !== null && s.loggedIn) void loadItems({ silent: true })
       } else {
-        setGithub((g) => ({ ...g, phase: 'error', error: message }))
+        failGithub(message)
       }
     } catch (err) {
-      setGithub((g) => ({ ...g, phase: 'error', error: err instanceof Error ? err.message : String(err) }))
+      failGithub(err instanceof Error ? err.message : String(err))
     }
   }
 
@@ -385,34 +405,39 @@ export function MyConfigsView({
         await runValidateWith(uploaded.zipPath)
       }
     } catch (err) {
-      patchWizard({ error: err instanceof Error ? err.message : String(err) })
+      // R-14：上传/选择失败 → 全局 Toast（原先经 wizard.error 用红色 error Banner 渲染）
+      toast.error(redact(err instanceof Error ? err.message : String(err)))
     }
   }
 
-  /** 校验指定 zipPath（选完 zip 自动调用；任何异常都落到 validationError 展示，不静默） */
+  /** 校验指定 zipPath（选完 zip 自动调用；任何异常都落到 validationError 展示，不静默）
+   *  R-15：校验不通过时**除就地 Banner 外再弹一次 Toast** —— 校验由「选完 zip」自动触发，
+   *  用户未必正看着校验步骤，Toast 保证送达；位置有语义的就地 Banner 保留（指引重新选择）。 */
   const runValidateWith = async (zipPath: string): Promise<void> => {
+    /** 统一出口「落校验错误 + 弹 Toast」（三条失败路径共用，避免文案重复） */
+    const failValidation = (message: string): void => {
+      patchWizard({ validating: false, validated: false, validationError: message })
+      toast.error(redact(message))
+    }
     try {
       patchWizard({ validating: true, validationError: null })
     } catch (err) {
       // 进入校验态失败（极端情况）：仍展示错误而不是无反应
-      setWizard((w) => ({ ...w, validationError: err instanceof Error ? err.message : String(err) }))
+      failValidation(err instanceof Error ? err.message : String(err))
       return
     }
     try {
       const analysis = await importApi.analyzeImport(zipPath)
       if (analysis.secretCount > 0) {
-        patchWizard({ validating: false, validated: false, validationError: t('myconfigs.upload.validateSecrets') })
+        failValidation(t('myconfigs.upload.validateSecrets'))
       } else if (!analysis.valid) {
-        patchWizard({ validating: false, validated: false, validationError: t('myconfigs.upload.validateInvalid') })
+        failValidation(t('myconfigs.upload.validateInvalid'))
       } else {
         // 校验通过 → 自动进入表单步骤（upload 模式从 validate 进 form；update 模式本就是 form，值相同无害）
         patchWizard({ validating: false, validated: true, validationError: null, step: 'form' })
       }
     } catch (err) {
-      patchWizard({
-        validating: false, validated: false,
-        validationError: err instanceof Error ? err.message : String(err),
-      })
+      failValidation(err instanceof Error ? err.message : String(err))
     }
   }
 
@@ -446,12 +471,18 @@ export function MyConfigsView({
         ? await meApi.meUpdate({ zipPath, form })
         : await meApi.meUpload({ zipPath, form })
       commitWizard({ ...wizardRef.current, running: false, result })
+      // R-19：上传/更新失败由全局 Toast 告知（结果卡的失败分支随之取消页内占位）
+      if (!result.ok) {
+        toast.error(redact(result.error ?? ((result.warnings ?? []).join(' · ') || t('common.unknownError'))))
+      }
       // 上传/更新成功后：清空旧收录状态 + 若收录后台进行中则轮询状态 + 刷新列表
       setListingStatus(null)
       if (result.ok && result.listing === 'pending') startListingPoll(result.itemId)
       void loadItems({ silent: true })
     } catch (err) {
-      patchWizard({ running: false, error: err instanceof Error ? err.message : String(err) })
+      // R-14：上传/更新请求失败 → 全局 Toast（原先经 wizard.error 用红色 error Banner 渲染）
+      patchWizard({ running: false })
+      toast.error(redact(err instanceof Error ? err.message : String(err)))
     }
   }
 
@@ -473,6 +504,14 @@ export function MyConfigsView({
 
   /* ------------------------------------------------ 收录/下架任务状态轮询 */
 
+  /** R-16：收录任务失败 → 常驻 Toast（durationMs=0，须手动关闭）。
+   *  收录是后台 fork + PR 异步任务（可能耗时约 2 分钟），用户多已离开结果卡，
+   *  只能靠全局 Toast 可靠送达；轮询与「重新提交」两条路径共用。 */
+  const notifyListingFailure = (s: ListingStatusResponse): void => {
+    if (s.listing !== 'failed') return
+    toast.error(redact(s.error ?? t('common.unknownError')), 0)
+  }
+
   /** 轮询 /me/listing 直到任务终态（done/failed/null）；间隔 3s、最多 40 次（≈2 分钟），
    *  后台 fork 更久时超时停止，用户可稍后手动刷新列表/点「重新收录」 */
   const startListingPoll = (itemId: string): void => {
@@ -488,6 +527,7 @@ export function MyConfigsView({
             return
           }
           setListingStatus(s)
+          notifyListingFailure(s)
           if (s.listing !== 'pending') return // done/failed → 停止轮询
         } catch {
           // 轮询失败不打断：下一轮继续
@@ -522,9 +562,11 @@ export function MyConfigsView({
     try {
       const s = await meApi.meRelist(itemId)
       setListingStatus(s)
+      notifyListingFailure(s)
       startListingPoll(itemId)
     } catch (err) {
-      patchWizard({ error: err instanceof Error ? err.message : String(err) })
+      // R-14：重新提交收录失败 → 全局 Toast
+      toast.error(redact(err instanceof Error ? err.message : String(err)))
     }
   }
 
@@ -536,17 +578,20 @@ export function MyConfigsView({
     try {
       const result = await meApi.meDelete(entry.id)
       if (result.ok) {
+        // R-14 既有缺陷修复：这两条本是**成功**文案，此前被塞进 error 字段、经红色 error Banner 渲染
+        // （「删除成功」显示成报错）。现按语义分流：成功 → toast.ok，失败 → toast.error，不再混用字段。
         if (result.delisted) {
-          patchWizard({ error: t('myconfigs.delete.delistStarted') })
+          toast.ok(t('myconfigs.delete.delistStarted'))
         } else if (result.prNumber !== null) {
-          patchWizard({ error: t('myconfigs.delete.prClosed') })
+          toast.ok(t('myconfigs.delete.prClosed'))
         }
         void loadItems({ silent: true })
       } else {
-        patchWizard({ error: result.error ?? t('common.unknownError') })
+        toast.error(redact(result.error ?? t('common.unknownError')))
       }
     } catch (err) {
-      patchWizard({ error: err instanceof Error ? err.message : String(err) })
+      // R-14：删除请求失败 → 全局 Toast
+      toast.error(redact(err instanceof Error ? err.message : String(err)))
     } finally {
       setDeletingId(null)
     }
@@ -559,13 +604,17 @@ export function MyConfigsView({
    *  防止「会话标题是 B、详情是 A」的串扰。 */
   const runDownload = async (entry: MyItemEntry): Promise<void> => {
     commitInstall({ itemId: entry.id, detail: null, approvals: {}, importing: false, importResult: null, error: null })
+    setNoApprovalHint(false) // 新会话：清掉上一次的「未批准」就地提示
     try {
       const detail = await api.download(entry.id, entry.repoUrl)
       if (installRef.current === null || installRef.current.itemId !== entry.id) return
       commitInstall({ ...installRef.current, detail, approvals: defaultApprovals(detail.plan) })
     } catch (err) {
       if (installRef.current === null || installRef.current.itemId !== entry.id) return
+      // R-17：下载失败 → 全局 Toast。install.error 仍落一次，仅作「失败标记」用于停掉
+      // 弹窗内的加载 Spinner（detail 恒为 null，否则会一直转 = 用户误以为仍在加载）；不再页内渲染。
       patchInstall({ error: err instanceof Error ? err.message : String(err) })
+      toast.error(redact(err instanceof Error ? err.message : String(err)))
     }
   }
 
@@ -573,9 +622,11 @@ export function MyConfigsView({
     if (install === null || install.detail === null) return
     const approvedPlan = buildApprovedPlan(install.detail.plan, install.approvals)
     if (approvedPlan.items.length === 0) {
-      patchInstall({ error: t('detail.noApproval') })
+      // K-07：未批准任何分区属**表单内联校验**（非动作失败）→ 保留就地提示（紧邻导入按钮）
+      setNoApprovalHint(true)
       return
     }
+    setNoApprovalHint(false)
     patchInstall({ importing: true, error: null })
     try {
       const executed = await importApi.executeImportPlan(
@@ -584,8 +635,20 @@ export function MyConfigsView({
         { confirm: true, rollbackOnError: true },
       )
       patchInstall({ importing: false, importResult: executed })
+      // R-07：导入结果改全局 Toast（成功 ok / 失败 error），成功分支不再页内占位。
+      // needsRestart 追加语与旧 Banner 文案保持一致（成功/失败两侧都附）。
+      const okCount = executed.executed.filter((e) => e.status === 'ok').length
+      const failedCount = executed.executed.filter((e) => e.status === 'failed').length
+      const restartSuffix = executed.needsRestart ? ` · ${t('import.needsRestart')}` : ''
+      if (executed.ok) {
+        toast.ok(t('import.done', { count: String(okCount) }) + restartSuffix)
+      } else {
+        toast.error(t('import.failed', { count: String(failedCount) }) + restartSuffix)
+      }
     } catch (err) {
+      // R-17：导入执行失败 → 全局 Toast（同样落 error 作失败标记）
       patchInstall({ importing: false, error: err instanceof Error ? err.message : String(err) })
+      toast.error(redact(err instanceof Error ? err.message : String(err)))
     }
   }
 
@@ -653,7 +716,7 @@ export function MyConfigsView({
           <div className={css.statRow}>
             <Badge kind={githubView.phase === 'error' ? 'error' : 'warn'}>{githubView.statusText}</Badge>
           </div>
-          {github.error !== null && <Banner kind="error">{redact(github.error)}</Banner>}
+          {/* R-18：失败详情已由 failGithub() 走全局 Toast；此处保留状态行 Badge（持续状态展示，非回执） */}
         </Card>
       )
     }
@@ -708,27 +771,20 @@ export function MyConfigsView({
       setListingStatus(null)
     }
     return (
-      <div
-        className={css.dialogMask}
-        onMouseDown={(e) => { if (e.target === e.currentTarget && !wizard.running && !wizard.validating) closeUpload() }}
+      <Modal
+        open
+        onClose={closeUpload}
+        title={wizard.mode === 'update' ? t('myconfigs.update.title') : t('myconfigs.upload.title')}
+        wide
+        busy={wizard.running || wizard.validating}
       >
-        <div className={`${css.dialogCard} ${css.dialogWide}`} role="dialog" aria-modal="true" aria-label={wizard.mode === 'update' ? t('myconfigs.update.title') : t('myconfigs.upload.title')}>
-          <div className={css.dialogHeaderRow}>
-            <span className={css.dialogHeader}>
-              {wizard.mode === 'update' ? t('myconfigs.update.title') : t('myconfigs.upload.title')}
-              {wizard.mode === 'update' && <Badge kind="info">{t('myconfigs.update.hint')}</Badge>}
-            </span>
-            <button
-              type="button"
-              className={css.dialogClose}
-              aria-label={t('common.close')}
-              disabled={wizard.running || wizard.validating}
-              onClick={closeUpload}
-            >
-              ×
-            </button>
-          </div>
-          <div className={css.dialogBodyScroll}>
+        <Modal.Header
+          title={wizard.mode === 'update' ? t('myconfigs.update.title') : t('myconfigs.upload.title')}
+          onClose={closeUpload}
+          closeDisabled={wizard.running || wizard.validating}
+          trailing={wizard.mode === 'update' ? <Badge kind="info">{t('myconfigs.update.hint')}</Badge> : undefined}
+        />
+        <Modal.Body scroll>
 
         {/* 步骤 1：选配置包 */}
         {wizard.step === 'select' && (<>
@@ -865,18 +921,20 @@ export function MyConfigsView({
           </div>
         </>)}
 
-        {wizard.error !== null && <Banner kind="error">{redact(wizard.error)}</Banner>}
+        {/* R-14：向导失败提示已由全局 Toast 送达（原 wizard.error Banner 移除） */}
 
-        {/* 结果卡：收录状态（异步）/ PR 链接 / 仓库链接 / sha256 / 分区 */}
-        {wizard.result !== null && (
-          wizard.result.ok ? (<>
+        {/* 结果卡：收录状态（异步）/ PR 链接 / 仓库链接 / sha256 / 分区。
+            R-19：上传/更新**失败**分支已由 runUpload 的全局 Toast 告知，此处只渲染成功结果卡
+            （失败分支本无其他可展示内容，故整块以 ok 守卫）。 */}
+        {wizard.result !== null && wizard.result.ok && (<>
             <span className={css.groupLabel}>{t('myconfigs.result.title')}</span>
             <div className={css.statRow}>
               <Badge kind="ok">{t('myconfigs.result.version', { version: wizard.result.version })}</Badge>
               <Badge kind="info">{t('myconfigs.result.sha256', { hash: wizard.result.sha256 })}</Badge>
               <Badge kind="info">{t('myconfigs.result.sections', { sections: wizard.result.sections.join(', ') })}</Badge>
             </div>
-            {/* 收录状态：pending=后台处理中（轮询中）；failed=失败可重试；done=已提交（PR 链接） */}
+            {/* 收录状态：pending=后台处理中（轮询中）；failed=失败可重试；done=已提交（PR 链接）。
+                R-16：失败**原因**改由常驻 Toast 送达（见 notifyListingFailure），此处保留徽章 + 重试按钮 */}
             {wizard.result.listing === 'pending' && (
               <div className={css.statRow}>
                 {listingStatus !== null && listingStatus.listing === 'failed' ? (
@@ -891,9 +949,6 @@ export function MyConfigsView({
                 )}
               </div>
             )}
-            {listingStatus !== null && listingStatus.listing === 'failed' && (
-              <Banner kind="error">{redact(listingStatus.error ?? t('common.unknownError'))}</Banner>
-            )}
             <div className={css.actionRow}>
               <Badge kind="info">{t('myconfigs.result.repo')}</Badge>
               <Button href={wizard.result.repoUrl}>{t('myconfigs.result.openRepo')}</Button>
@@ -901,15 +956,9 @@ export function MyConfigsView({
                 <Button href={prLink.url}>{prLink.label}</Button>
               )}
             </div>
-          </>) : (
-            <Banner kind="error">
-              {redact(wizard.result.error ?? ((wizard.result.warnings ?? []).join(' · ') || t('common.unknownError')))}
-            </Banner>
-          )
-        )}
-          </div>
-        </div>
-      </div>
+        </>)}
+        </Modal.Body>
+      </Modal>
     )
   }
 
@@ -992,26 +1041,26 @@ export function MyConfigsView({
     const approvalSummary = detail !== null ? approvedAdapterSummary(detail.plan, install.approvals) : null
     const detailView = detail !== null ? marketDetailView(detail, detail.repo ?? entryRepoUrl(install.itemId), true, uiT) : null
     return (
-      <div
-        className={css.dialogMask}
-        onMouseDown={(e) => { if (e.target === e.currentTarget && !install.importing) closeInstall() }}
+      <Modal
+        open
+        onClose={closeInstall}
+        title={t('detail.title')}
+        wide
+        busy={install.importing}
       >
-        <div className={`${css.dialogCard} ${css.dialogWide}`} role="dialog" aria-modal="true" aria-label={t('detail.title')}>
-          <div className={css.dialogHeaderRow}>
-            <span className={css.dialogHeader}>{t('detail.title')}：{install.itemId}</span>
-            <button
-              type="button"
-              className={css.dialogClose}
-              aria-label={t('common.close')}
-              disabled={install.importing}
-              onClick={closeInstall}
-            >
-              ×
-            </button>
-          </div>
-          <div className={css.dialogBodyScroll}>
-        {install.error !== null && <Banner kind="error">{redact(install.error)}</Banner>}
-        {detail === null && <div className={css.statRow}><Spinner label={t('list.loading')} /></div>}
+        <Modal.Header
+          title={`${t('detail.title')}：${install.itemId}`}
+          onClose={closeInstall}
+          closeDisabled={install.importing}
+        />
+        <Modal.Body scroll>
+        {/* R-17：下载/导入失败已由全局 Toast 告知（原 install.error Banner 移除）。
+            下方 Spinner 以 install.error 为「失败标记」守卫：失败时 detail 恒为 null，
+            若不守卫会一直旋转，让用户误以为仍在加载。 */}
+        {detail === null && install.error === null && <div className={css.statRow}><Spinner label={t('list.loading')} /></div>}
+        {detail === null && install.error !== null && (
+          <div className={css.statRow}><span className={css.hint}>{t('myconfigs.install.failed')}</span></div>
+        )}
         {detail !== null && detailView !== null && (<>
           <Banner kind="warn"><strong>{t('detail.needReview')}</strong></Banner>
           <div className={css.statRow}>
@@ -1064,18 +1113,12 @@ export function MyConfigsView({
               {install.importing ? <Spinner label={t('common.loading')} /> : t('detail.import')}
             </Button>
           </div>
+          {/* K-07：未批准任何分区（表单内联校验，保留就地提示；紧邻导入按钮，修正勾选后立即消失） */}
+          {noApprovalHint && <Banner kind="error">{t('detail.noApproval')}</Banner>}
         </>)}
-        {install.importResult !== null && (
-          <Banner kind={install.importResult.ok ? 'ok' : 'error'}>
-            {install.importResult.ok
-              ? `导入完成：${install.importResult.executed.filter((e) => e.status === 'ok').length} 项写入`
-              : `导入失败（${install.importResult.executed.filter((e) => e.status === 'failed').length} 项失败）`}
-            {install.importResult.needsRestart && ' · 部分改动需重启 DSH 后生效'}
-          </Banner>
-        )}
-          </div>
-        </div>
-      </div>
+        {/* R-07：装回本地导入结果已由全局 Toast 送达（原 importResult Banner 移除） */}
+        </Modal.Body>
+      </Modal>
     )
   }
 

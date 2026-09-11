@@ -31,9 +31,11 @@ import type { ConfigManagerApi, ExportPreviewResponse } from '../api.ts'
 import { runStore, type ExportMode } from '../run-store.ts'
 import { formatBytes } from '../../ui/report.ts'
 import { Badge, Banner, Button, Checkbox, Segmented, Spinner } from '../common/ui.tsx'
+import { PreviewIcon } from '../common/Icon.tsx'
 import { ErrorBanner } from '../common/ErrorBanner.tsx'
 import { ProgressBar } from '../common/ProgressBar.tsx'
 import { ReportView } from '../common/ReportView.tsx'
+import { toast } from '../common/toast-store.ts'
 import css from '../config-manager.module.css'
 
 export interface ExportViewProps {
@@ -66,7 +68,6 @@ export function ExportView({ api, t }: ExportViewProps) {
   const progress = exp.progress
   const result = exp.result
   const error = exp.error
-  const downloaded = exp.downloaded
   /** 下载进行中（瞬态 UI） */
   const [downloading, setDownloading] = useState(false)
   /** 下载防重入 ref */
@@ -158,8 +159,10 @@ export function ExportView({ api, t }: ExportViewProps) {
           progress: { stage: 'done', step: 1, total: 1 },
         },
       })
-      // 导出完成即自动下载到浏览器「下载」目录
+      {/* 导出完成即自动下载到浏览器「下载」目录 */}
       await download(run.zipPath)
+      // 下载是静默的（不弹系统框），用户点完很可能已切走 → 用 Toast 送达回执
+      toast.ok(t('export.saved', { name: run.report.file.name }))
     } catch (err) {
       runStore.patch({ export: { error: err instanceof Error ? err.message : String(err) } })
     } finally {
@@ -178,7 +181,10 @@ export function ExportView({ api, t }: ExportViewProps) {
       await api.download(zipPath)
       runStore.patch({ export: { downloaded: true } })
     } catch (err) {
-      runStore.patch({ export: { error: err instanceof Error ? err.message : String(err) } })
+      // 下载失败：同时用 Toast 送达（自动下载是静默的，用户可能已切走）
+      const message = err instanceof Error ? err.message : String(err)
+      runStore.patch({ export: { error: message } })
+      toast.error(message)
     } finally {
       downloadingRef.current = false
       setDownloading(false)
@@ -203,7 +209,7 @@ export function ExportView({ api, t }: ExportViewProps) {
         />
         <span className={css.statusSpacer} />
         <Button size="sm" disabled={running} title={t('export.preview')} onClick={() => { void runPreview() }}>
-          {preview?.loading === true ? <Spinner /> : <span aria-hidden="true">◔</span>} {t('export.preview')}
+          {preview?.loading === true ? <Spinner /> : <PreviewIcon size={13} />} {t('export.preview')}
         </Button>
         <Button
           variant="primary"
@@ -351,7 +357,6 @@ export function ExportView({ api, t }: ExportViewProps) {
       {result !== null && !running && (
         <>
           <ReportView kind="export" exportReport={result.report} onDownload={() => { void download(result.zipPath) }} downloadBusy={downloading} t={api.t} />
-          {downloaded && <Banner kind="ok">{t('export.saved', { name: result.report.file.name })}</Banner>}
         </>
       )}
     </div>

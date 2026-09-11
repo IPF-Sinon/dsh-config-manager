@@ -23,6 +23,7 @@ import type { RecoveryPreview, RecoveryStatus, RecoveryVerifyResult } from '../.
 import type { TranslateNS } from '../client-types.ts'
 import { Badge, Banner, Button, Card, Empty, SectionTitle, Spinner } from '../common/ui.tsx'
 import { ConfirmDialog } from '../common/ConfirmDialog.tsx'
+import { toast } from '../common/toast-store.ts'
 import { runStore, type RecoveryStoreSlice } from '../run-store.ts'
 import {
   isSnapshotTrusted, isVerdictAttention, isVerdictSuccess, toRecoveryPreviewView,
@@ -230,11 +231,10 @@ export function RecoveryPanel({ recoveryApi, t }: RecoveryPanelProps) {
         return recoveryApi.verify(operationId)
       },
       (err) => {
-        patch({
-          running: false,
-          actionError: err instanceof Error ? err.message : String(err),
-        })
+        patch({ running: false })
         runStore.stopRunWatch('recovery')
+        // 确认弹窗已关闭 → 用 Toast 送达（写 panel state 将无渲染点）
+        toast.error(err instanceof Error ? err.message : String(err))
         return null
       },
     ).then((verifyResult) => {
@@ -259,11 +259,9 @@ export function RecoveryPanel({ recoveryApi, t }: RecoveryPanelProps) {
     recoveryApi.retry(operationId, true).then(
       () => recoveryApi.verify(operationId),
       (err) => {
-        patch({
-          running: false,
-          actionError: err instanceof Error ? err.message : String(err),
-        })
+        patch({ running: false })
         runStore.stopRunWatch('recovery')
+        toast.error(err instanceof Error ? err.message : String(err))
         return null
       },
     ).then((verifyResult) => {
@@ -289,10 +287,8 @@ export function RecoveryPanel({ recoveryApi, t }: RecoveryPanelProps) {
         load()
       },
       (err) => {
-        patch({
-          running: false,
-          actionError: err instanceof Error ? err.message : String(err),
-        })
+        patch({ running: false })
+        toast.error(err instanceof Error ? err.message : String(err))
       },
     )
   }
@@ -308,12 +304,9 @@ export function RecoveryPanel({ recoveryApi, t }: RecoveryPanelProps) {
     <div className={css.viewBody}>
       <SectionTitle title={t('view.recovery')} subtitle={t('recovery.requiredHint')} />
 
-      {/* SAFE MODE / recovery-required 状态提示 */}
+      {/* SAFE MODE / recovery-required 状态提示（正常态不渲染任何横幅——无事项即静默） */}
       {view?.recoveryRequired === true && (
         <Banner kind="error">{t('recovery.currentState.safeMode')}</Banner>
-      )}
-      {view?.recoveryRequired === false && state.status === 'ready' && (
-        <Banner kind="ok">{t('recovery.currentState.safeModeCleared')}</Banner>
       )}
 
       {state.status === 'loading' && <Spinner label={t('recovery.loading')} />}

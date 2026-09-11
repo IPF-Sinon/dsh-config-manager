@@ -18,9 +18,11 @@ export const zh = {
   'config.title': '市场仓库',
   'config.refresh': '拉取最新',
   'config.refreshing': '拉取中…',
+  'config.refreshed': '已拉取最新市场目录',
   // 列表
   'list.empty': '内置市场尚未加载。请先「拉取最新」。',
   'list.browse': '浏览',
+  'list.browsed': '已重新浏览市场',
   'list.loading': '正在读取市场…',
   'list.noItems': '该市场暂无条目。',
   'list.searchPlaceholder': '搜索名称 / 作者 / 描述…',
@@ -66,6 +68,12 @@ export const zh = {
   'detail.approval.safe': '可导入',
   'detail.approval.count': '已批准 {selected}/{total} 分区',
   'detail.noApproval': '未批准任何分区，无法导入',
+  // 导入结果（全局 Toast 文案；MarketPanel 详情弹窗与 MyConfigsView 装回本地共用同一组键）
+  'import.done': '导入完成：{count} 项写入',
+  'import.failed': '导入失败（{count} 项失败）',
+  'import.needsRestart': '部分改动需重启 DSH 后生效',
+  // R-21：下载失败时详情弹窗内的占位说明（失败详情走全局 Toast；此处仅避免一直转圈）
+  'detail.failed': '下载失败，请关闭弹窗后重试（详情见右下角提示）',
   // 我的配置（一键上传 / 查看 / 更新，设计文档 §4.6）
   'myconfigs.tab.browse': '浏览市场',
   'myconfigs.tab.myconfigs': '我的配置',
@@ -135,6 +143,8 @@ export const zh = {
   'myconfigs.item.update': '更新',
   'myconfigs.item.install': '装回本地',
   'myconfigs.item.openPr': '查看收录 PR',
+  // 装回本地（R-17：失败详情走全局 Toast，此处仅作弹窗内占位说明，替代原一直旋转的加载态）
+  'myconfigs.install.failed': '下载失败，请关闭弹窗后重试（详情见右下角提示）',
   // 删除条目（弹窗二次确认 + 下架处理）
   'myconfigs.delete.run': '删除',
   'myconfigs.delete.confirm': '确认删除',
@@ -166,8 +176,10 @@ export const en: Record<keyof typeof zh, string> = {
   'config.title': 'Market Repository',
   'config.refresh': 'Refresh',
   'config.refreshing': 'Refreshing…',
+  'config.refreshed': 'Market index refreshed',
   'list.empty': 'The built-in market has not loaded yet. Click "Refresh" first.',
   'list.browse': 'Browse',
+  'list.browsed': 'Market re-browsed',
   'list.loading': 'Reading market…',
   'list.noItems': 'This market has no items.',
   'list.searchPlaceholder': 'Search name / author / description…',
@@ -210,6 +222,10 @@ export const en: Record<keyof typeof zh, string> = {
   'detail.approval.safe': 'Importable',
   'detail.approval.count': '{selected}/{total} section(s) approved',
   'detail.noApproval': 'No sections approved — cannot import',
+  'import.done': 'Import complete: {count} item(s) written',
+  'import.failed': 'Import failed ({count} item(s) failed)',
+  'import.needsRestart': 'Some changes need a DSH restart to take effect',
+  'detail.failed': 'Download failed — close this dialog and retry (see the notice at the bottom right)',
   'myconfigs.tab.browse': 'Browse Market',
   'myconfigs.tab.myconfigs': 'My Configs',
   'myconfigs.back': 'Back to market',
@@ -273,6 +289,7 @@ export const en: Record<keyof typeof zh, string> = {
   'myconfigs.item.update': 'Update',
   'myconfigs.item.install': 'Install locally',
   'myconfigs.item.openPr': 'View listing PR',
+  'myconfigs.install.failed': 'Download failed — close this dialog and retry (see the notice at the bottom right)',
   'myconfigs.delete.run': 'Delete',
   'myconfigs.delete.confirm': 'Confirm delete',
   'myconfigs.delete.confirmTitle': 'Delete item',

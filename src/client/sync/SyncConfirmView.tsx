@@ -13,6 +13,7 @@ import type { ReactNode } from 'react'
 import { useEffect } from 'react'
 
 import { Badge, Banner, Button, Spinner } from '../common/ui.tsx'
+import { toast } from '../common/toast-store.ts'
 import { ConsultCard } from '../consult/ConsultCard.tsx'
 import type { ConsultReport } from '../../core/migration-consult.ts'
 import type { SyncApi, SyncConfirmItem } from './sync-api.ts'
@@ -140,6 +141,13 @@ export function SyncConfirmView(props: SyncConfirmViewProps): ReactNode {
       const result = await api.applyItems({ syncSessionId, adoptions });
       setPhase(result.ok ? 'done' : 'failed');
       setApplyResult(result);
+      // R-05：导入成功改走 Toast —— 在此处（而非 ApplyResultCard 渲染期）触发，
+      // 保证每次 apply 恰好一次、且重渲染不会重复弹。失败分支**不**弹 Toast，
+      // 由 ApplyResultCard 的 error Banner 承载（K-06：同卡内还有 warnings 明细与
+      // 回滚危险按钮，用户必须停在此处决策）。
+      if (result.ok) {
+        toast.ok(t('syncflow.importDone', { n: String(result.applied.length) }));
+      }
     } catch (err) {
       setPhase('failed');
       setError(err instanceof Error ? err.message : String(err));
@@ -162,6 +170,9 @@ export function SyncConfirmView(props: SyncConfirmViewProps): ReactNode {
       await api.rollback({ restoreId });
       setPhase('done');
       setApplyResult(null);
+      // R-04：回滚成功改走 Toast（原 ok Banner 只在「回滚成功」这一条路径出现；
+      // 操作已完成、用户可离开，不需要停留阅读）。下方「关闭」按钮保留。
+      toast.ok(t('syncflow.rollbackDone'));
       onRollbackDone?.();
     } catch (err) {
       setPhase('failed');
@@ -280,7 +291,9 @@ export function SyncConfirmView(props: SyncConfirmViewProps): ReactNode {
       )}
       {(phase === 'done' || phase === 'failed') && applyResult === null && (
         <>
-          <Banner kind="ok">{t('syncflow.rollbackDone')}</Banner>
+          {/* R-04：回滚成功的 ok Banner 已改为 Toast（见 runRollback）。此处仅保留收尾「关闭」按钮；
+             一并消除了原实现在 runApply 抛错（phase=failed 且 applyResult 仍为 null）时
+              误显示「已回滚到应用前」的问题 —— 那种情况下方 error Banner 才是唯一事实。 */}
           <div className={css.actionRow} style={{ marginTop: '12px' }}>
             <Button variant="primary" disabled={busy} onClick={() => { onCancel() }}>
               {t('common.close')}
@@ -352,9 +365,10 @@ function ApplyResultCard({ result, busy, t, onRollback }: ApplyResultCardProps):
   const ok = result.ok;
   return (
     <>
-      <Banner kind={ok ? 'ok' : 'error'}>
-        {ok ? t('syncflow.importDone', { n: String(result.applied.length) }) : t('syncflow.importFailed')}
-      </Banner>
+      {/* R-05：成功分支已改走 Toast（见 runApply）；此处只保留失败 Banner ——
+          K-06 要求失败后用户停留本卡阅读 warnings 明细并决定是否回滚，
+          自动消失的 Toast 无法承载这个决策入口。 */}
+      {!ok && <Banner kind="error">{t('syncflow.importFailed')}</Banner>}
       {result.needsRestart && <Banner kind="warn">{t('syncflow.needsRestart')}</Banner>}
       {result.applied.length > 0 && (
         <div>

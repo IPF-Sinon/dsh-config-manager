@@ -36,10 +36,13 @@ import { RecoveryPanel } from './recovery/RecoveryPanel.tsx'
 import { HistoryPanel } from './history/HistoryPanel.tsx'
 import { toRecoveryView } from './recovery/recovery-view.ts'
 import { ConfirmDialog } from './common/ConfirmDialog.tsx'
+import { MODAL_ROOT_ID } from './common/Modal.tsx'
 import { Banner, IconButton, Segmented, StatusDot } from './common/ui.tsx'
+import { ActivityIcon, AboutIcon, CloseIcon } from './common/Icon.tsx'
 import { evaluateStarPrompt } from '../ui/star-prompt.ts'
 import { evaluateReleaseNotesPrompt } from '../ui/release-notes-prompt.ts'
 import { ReleaseNotesDialog } from './about/ReleaseNotesDialog.tsx'
+import { ToastViewport } from './common/ToastViewport.tsx'
 import css from './config-manager.module.css'
 
 export type ConfigManagerSectionProps =
@@ -281,7 +284,9 @@ export function ConfigManagerSection({ api, syncApi, syncT, marketApi, myConfigs
   }
 
   return (
-    <div className={css.section}>
+    // id 同时作为 Radix Modal 的 Portal 容器（见 common/Modal.tsx 的 MODAL_ROOT_ID 说明）：
+    // 弹窗必须留在宿主设置弹窗的层叠上下文内，否则会被宿主 overlay(z-index:1000) 盖住而「隐形」。
+    <div className={css.section} id={MODAL_ROOT_ID}>
       {/* 顶部导航条：页签 + 图标动作 */}
       <nav className={css.shellNav} aria-label={t('section.label')}>
         <div className={css.navStrip} role="tablist" onKeyDown={onTablistKeyDown}>
@@ -308,7 +313,7 @@ export function ConfigManagerSection({ api, syncApi, syncT, marketApi, myConfigs
             data-active={drawerOpen && state.more.moreSub === 'history' ? '' : undefined}
             onClick={() => { openDrawer('history') }}
           >
-            <span aria-hidden="true">◷</span> {t('overview.nav.activity')}
+            <ActivityIcon size={13} /> {t('overview.nav.activity')}
           </button>
           <button
             type="button"
@@ -317,7 +322,7 @@ export function ConfigManagerSection({ api, syncApi, syncT, marketApi, myConfigs
             data-active={drawerOpen && state.more.moreSub === 'about' ? '' : undefined}
             onClick={() => { openDrawer('about') }}
           >
-            <span aria-hidden="true">ⓘ</span> {t('overview.nav.about')}
+            <AboutIcon size={13} /> {t('overview.nav.about')}
           </button>
         </div>
       </nav>
@@ -377,7 +382,7 @@ export function ConfigManagerSection({ api, syncApi, syncT, marketApi, myConfigs
           >
             <div className={css.drawerHeader}>
               <span className={css.drawerTitle}>{t('shell.drawer.title')}</span>
-              <IconButton icon="✕" label={t('common.close')} onClick={closeDrawer} />
+              <IconButton icon={<CloseIcon size={14} />} label={t('common.close')} onClick={closeDrawer} />
             </div>
             <div style={{ padding: '10px 14px 0' }}>
               <Segmented
@@ -398,6 +403,9 @@ export function ConfigManagerSection({ api, syncApi, syncT, marketApi, myConfigs
           </aside>
         </>
       )}
+
+      {/* 全局通知视口（右下角堆叠；绝对定位贴合本根节点，见 §6 Overlays） */}
+      <ToastViewport t={t} />
 
       {/* Star 引导弹窗（「去点 Star」= primary 主操作，「不再提示」= 次按钮） */}
       <ConfirmDialog

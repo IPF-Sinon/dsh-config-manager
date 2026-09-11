@@ -35,6 +35,10 @@
   color: var(--dsw-alias-label-primary);
   /* 弹窗内容区内的滚动包容：本组件自己管理滚动，不外溢 */
   overflow: hidden;
+  /* Toast 视口的定位上下文（见 §6 Overlays 的 .toastViewport）：
+     通知层必须留在插件自己的层叠上下文内（宿主 overlay z-index 1000），
+     故用绝对定位贴合本根节点，而非 Portal 到 body。 */
+  position: relative;
 }
 
 /* 交互过渡统一参数（hover/focus 颜色过渡；仅颜色属性，克制） */
@@ -56,6 +60,13 @@
   font-variant-numeric: tabular-nums;
 }
 
+/* Lucide 图标统一行为：继承文字色（跟随 --dsw-* token / data-danger / hover），
+   在 flex 容器（按钮/行）内不收缩、垂直居中，描边与正文视觉重量匹配。 */
+.section svg {
+  flex: none;
+  color: inherit;
+}
+
 /* 键盘提示 */
 .kbd {
   display: inline-block;
@@ -72,23 +83,26 @@
 
 /* ================================================================ §2 Shell */
 
-/* —— 顶部导航条（sticky）：左侧页签，右侧图标动作 —— */
+/* —— 顶部导航条：左侧页签（圆角分段条），右侧图标动作 —— */
 .shellNav {
   display: flex;
-  align-items: stretch;
-  gap: 2px;
+  align-items: center;
+  gap: 8px;
   flex: none;
-  padding: 0 8px;
-  border-bottom: 1px solid var(--dsw-alias-border-l1);
+  padding: 8px;
   background: var(--dsw-alias-bg-base);
 }
 
 .navStrip {
   display: flex;
-  align-items: stretch;
-  gap: 1px;
+  align-items: center;
+  gap: 2px;
   flex: 1 1 auto;
   min-width: 0;
+  padding: 2px;
+  border: 1px solid var(--dsw-alias-border-l1);
+  border-radius: 8px;
+  background: var(--dsw-alias-bg-layer-2);
   overflow-x: auto;
   scrollbar-width: none;
 }
@@ -97,14 +111,17 @@
   display: none;
 }
 
-/* 页签：紧凑分段，激活态 = 底线 + 主色 */
+/* 页签：分段条内的圆角药丸，激活态 = 主色淡底 + 主色描边 */
 .navTab {
   position: relative;
   display: inline-flex;
   align-items: center;
   gap: 5px;
-  padding: 0 9px;
+  flex: none;
+  height: 24px;
+  padding: 0 10px;
   border: none;
+  border-radius: 6px;
   background: none;
   font: inherit;
   font-size: 12px;
@@ -121,24 +138,15 @@
 
 .navTab:focus-visible {
   outline: 2px solid var(--dsw-alias-state-business-primary);
-  outline-offset: -2px;
-  border-radius: 4px;
+  outline-offset: 1px;
+  border-radius: 6px;
 }
 
 .navTab[data-active] {
+  background: color-mix(in srgb, var(--dsw-alias-state-business-primary) 16%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--dsw-alias-state-business-primary) 45%, transparent);
   color: var(--dsw-alias-label-primary);
   font-weight: 600;
-}
-
-.navTab[data-active]::after {
-  content: '';
-  position: absolute;
-  left: 8px;
-  right: 8px;
-  bottom: -1px;
-  height: 2px;
-  border-radius: 2px 2px 0 0;
-  background: var(--dsw-alias-state-business-primary);
 }
 
 /* 页签上的告警点（如恢复待处理） */
@@ -244,16 +252,18 @@
   padding: 12px 16px 16px;
 }
 
-/* —— 底部状态栏 —— */
+/* —— 底部状态栏：与顶部页签条同款（圆角分段条 + 四周留白，不再通栏贴边） —— */
 .statusBar {
   display: flex;
   align-items: center;
   gap: 10px;
   flex: none;
-  height: 26px;
-  padding: 0 12px;
-  border-top: 1px solid var(--dsw-alias-border-l1);
-  background: var(--dsw-alias-bg-base);
+  height: 28px;
+  margin: 0 8px 8px;
+  padding: 0 10px;
+  border: 1px solid var(--dsw-alias-border-l1);
+  border-radius: 8px;
+  background: var(--dsw-alias-bg-layer-2);
   font-size: 11px;
   color: var(--dsw-alias-label-tertiary);
   white-space: nowrap;
@@ -590,7 +600,7 @@
   display: flex;
   align-items: baseline;
   gap: 8px;
-  margin-bottom: 8px;
+  margin-bottom: 10px;
 }
 
 /* 卡头内的分组标题：不收缩、不换行（防止长 hint 把标题挤成竖排） */
@@ -767,7 +777,7 @@
 }
 
 .dataTable td {
-  padding: 7px 10px;
+  padding: 6px 10px;
   border-bottom: 1px solid color-mix(in srgb, var(--dsw-alias-border-l1) 55%, transparent);
   vertical-align: middle;
   color: var(--dsw-alias-label-primary);
@@ -808,15 +818,17 @@
 .rowActions {
   display: inline-flex;
   align-items: center;
-  gap: 2px;
+  gap: 3px;
 }
 
-/* 表格主列：名称 + 内联元数据 */
+/* 表格主列：名称 + 内联元数据（固定最小高度，避免「有徽章/备注」与「无」的行高跳动） */
 .cellMain {
   display: flex;
   flex-direction: column;
+  justify-content: center;
   gap: 1px;
   min-width: 0;
+  min-height: 30px;
 }
 
 .cellTitle {
@@ -832,6 +844,22 @@
   gap: 6px;
   font-size: 11px;
   color: var(--dsw-alias-label-tertiary);
+  overflow: hidden;
+  min-width: 0;
+}
+
+/* 备注文本：作为 cellMeta 的可收缩子项，单行省略（避免硬截断无 … 的「未完成感」 */
+.cellMetaNote {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  min-width: 0;
+  flex: 0 1 auto;
+}
+
+/* 备注文字本体：块级省略（text-overflow 需作用于可收缩的块/inline-block 文本元素） */
+.cellMetaNoteText {
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1210,6 +1238,16 @@ button.statCard:focus-visible {
   background: color-mix(in srgb, var(--dsw-alias-bg-base) 55%, transparent);
 }
 
+/* Radix Dialog.Content 自居中定位（Portal 下与 Overlay 平级，需自身 fixed 居中；
+   旧内联弹窗里 .dialogCard 是 .dialogMask(flex) 的子元素，无需此类——两者并存兼容）。 */
+.dialogContentCenter {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  z-index: 101;
+}
+
 .dialogCard {
   width: 380px;
   max-width: calc(100vw - 48px);
@@ -1256,6 +1294,106 @@ button.statCard:focus-visible {
 
 .dialogWide {
   width: 480px;
+}
+
+/* 弹窗底部按钮区：右对齐，顶部分隔线，与正文区分 */
+.dialogFooter {
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 10px 16px 14px;
+  margin: 0;
+  border-top: 1px solid var(--dsw-alias-border-l1);
+}
+
+/* —— 全局通知（右下角堆叠） ——
+   定位：absolute 贴合 .section（非 fixed/Portal），确保落在宿主弹窗层叠上下文内；
+   容器不吃指针事件，避免遮挡右下角的页面点击（状态栏/列表），仅卡片自身可交互。 */
+.toastViewport {
+  position: absolute;
+  right: 10px;
+  bottom: 42px; /* 让开 28px 状态栏 + 8px 外边距 */
+  /* 高于页面内容、状态栏(无)、弹窗遮罩(100)与卡片(101)：弹窗打开期间触发的通知
+     不能落在遮罩之下（否则被 55% 不透明遮罩盖住而严重褪色）。
+     仍留在插件层叠上下文内，因此不会越过宿主 overlay(z-index: 1000)。 */
+  z-index: 120;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 8px;
+  max-width: calc(100% - 20px);
+  pointer-events: none;
+}
+
+.toast {
+  pointer-events: auto;
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  width: fit-content;
+  max-width: 340px;
+  padding: 8px 10px;
+  border: 1px solid var(--dsw-alias-border-l1);
+  border-radius: 8px;
+  background: var(--dsw-alias-bg-layer-2);
+  box-shadow: 0 8px 24px color-mix(in srgb, var(--dsw-alias-bg-base) 45%, transparent);
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--dsw-alias-label-primary);
+  animation: toastIn 160ms ease-out;
+}
+
+@keyframes toastIn {
+  from { transform: translateY(6px); opacity: 0; }
+  to { transform: translateY(0); opacity: 1; }
+}
+
+/* 四态语义：左侧色条 + 图标着色（复用 Badge/Banner 的 --dsw-* 状态色） */
+.toast[data-kind='ok'] {
+  border-color: color-mix(in srgb, var(--dsw-alias-state-success-primary) 40%, transparent);
+}
+
+.toast[data-kind='ok'] .toastGlyph {
+  color: var(--dsw-alias-state-success-primary);
+}
+
+.toast[data-kind='info'] .toastGlyph {
+  color: var(--dsw-alias-state-business-primary);
+}
+
+.toast[data-kind='warn'] {
+  border-color: color-mix(in srgb, var(--dsw-alias-state-warn-primary) 40%, transparent);
+}
+
+.toast[data-kind='warn'] .toastGlyph {
+  color: var(--dsw-alias-state-warn-primary);
+}
+
+.toast[data-kind='error'] {
+  border-color: color-mix(in srgb, var(--dsw-alias-state-error-primary) 45%, transparent);
+}
+
+.toast[data-kind='error'] .toastGlyph {
+  color: var(--dsw-alias-state-error-primary);
+}
+
+.toastGlyph {
+  display: inline-flex;
+  flex: none;
+  /* 与首行文字对齐（图标 14px 对 12px 正文，上移 1px 视觉居中） */
+  margin-top: 1px;
+}
+
+.toastText {
+  min-width: 0;
+  word-break: break-word;
+}
+
+/* 关闭按钮：与 IconButton 尺寸一致但更贴合通知条（26px → 18px 视觉内缩） */
+.toast > button {
+  width: 18px;
+  height: 18px;
+  flex: none;
+  margin-left: 2px;
 }
 
 /* —— 右侧抽屉（活动/历史） —— */
@@ -1330,7 +1468,7 @@ button.statCard:focus-visible {
   display: flex;
   align-items: stretch;
   gap: 0;
-  height: 32px;
+  min-height: 32px;
   border: 1px solid var(--dsw-alias-border-l1);
   border-radius: 8px;
   background: var(--dsw-alias-bg-layer-2);
@@ -1341,6 +1479,11 @@ button.statCard:focus-visible {
 
 .statStrip::-webkit-scrollbar {
   display: none;
+}
+
+/* 末段不被容器右缘裁切：预留内边距，保证最后一个指标值完整可见 */
+.statStrip > :last-child {
+  padding-right: 12px;
 }
 
 .statStrip[data-tone='error'] {
@@ -1365,11 +1508,33 @@ button.statCard:focus-visible {
   flex: none;
 }
 
+/* 健康段兼作入口：仅在「存在未解决恢复事项」时渲染为按钮，直达备份页「事故恢复」。
+   其余状态仍是纯展示的 span，避免出现无落点的可点区域。 */
+.statHealthAction {
+  border: none;
+  background: none;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  text-align: left;
+}
+
+.statHealthAction:hover {
+  background: var(--dsw-alias-interactive-bg-hover);
+}
+
+.statHealthAction:focus-visible {
+  outline: 2px solid var(--dsw-alias-state-business-primary);
+  outline-offset: -2px;
+  border-radius: 6px;
+}
+
 .statSeg {
   display: flex;
   align-items: center;
-  gap: 5px;
-  padding: 0 10px;
+  gap: 6px;
+  padding: 0 12px;
   border: none;
   border-left: 1px solid var(--dsw-alias-border-l1);
   background: none;
@@ -1381,9 +1546,18 @@ button.statCard:focus-visible {
   flex: none;
 }
 
+/* 指标段标签：弱化、不换行，与加粗值形成清晰两级 */
+.statSeg > span:first-child {
+  color: var(--dsw-alias-label-tertiary);
+}
+
 .statSeg:hover {
   background: var(--dsw-alias-interactive-bg-hover);
   color: var(--dsw-alias-label-primary);
+}
+
+.statSeg:hover > span:first-child {
+  color: var(--dsw-alias-label-secondary);
 }
 
 .statSeg:focus-visible {
@@ -1437,8 +1611,8 @@ button.statCard:focus-visible {
   flex: 1 1 auto;
   min-width: 0;
   display: inline-flex;
-  align-items: baseline;
-  gap: 6px;
+  align-items: center;
+  gap: 8px;
 }
 
 .infoValue .mono {
@@ -1454,8 +1628,8 @@ button.statCard:focus-visible {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 18px;
-  height: 18px;
+  width: 20px;
+  height: 20px;
   padding: 0;
   border: none;
   border-radius: 4px;
@@ -1500,7 +1674,7 @@ button.statCard:focus-visible {
   display: flex;
   align-items: center;
   gap: 8px;
-  margin-bottom: 6px;
+  margin-bottom: 8px;
 }
 
 .activityTitle {
@@ -1512,7 +1686,10 @@ button.statCard:focus-visible {
 }
 
 .activityRows {
-  flex: none;
+  /* 可收缩：卡片被页面挤压缩短时列表随之收缩（自身 overflow 内滚），
+     否则列表保持 272px 而卡片变矮 → 内容溢出卡片边框（曾实测 274px 内容 vs 205px 卡片）。 */
+  flex: 0 1 auto;
+  min-height: 0;
   overflow-y: auto;
   border: 1px solid var(--dsw-alias-border-l1);
   border-radius: 8px;
@@ -1525,12 +1702,14 @@ button.statCard:focus-visible {
 }
 
 .activityRow {
-  display: flex;
+  display: grid;
+  grid-template-columns: 72px minmax(0, 1fr) auto;
   align-items: center;
-  gap: 8px;
+  gap: 10px;
   padding: 5px 10px;
   border-bottom: 1px solid color-mix(in srgb, var(--dsw-alias-border-l1) 55%, transparent);
   font-size: 11.5px;
+  line-height: 1.5;
   min-width: 0;
 }
 
@@ -1539,9 +1718,8 @@ button.statCard:focus-visible {
 }
 
 .activityTime {
-  flex: none;
-  width: 72px;
-  text-align: right;
+  justify-self: end;
+  line-height: 1.5;
   color: var(--dsw-alias-label-tertiary);
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-size: 10.5px;
@@ -1550,17 +1728,18 @@ button.statCard:focus-visible {
 
 .activityKind {
   flex: none;
+  line-height: 1.5;
   color: var(--dsw-alias-label-tertiary);
   font-size: 11px;
   white-space: nowrap;
 }
 
 .activitySummary {
-  flex: 1 1 auto;
   min-width: 0;
+  line-height: 1.5;
   display: inline-flex;
   align-items: center;
-  gap: 4px;
+  gap: 6px;
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-size: 11px;
   color: var(--dsw-alias-label-secondary);
@@ -1574,6 +1753,10 @@ button.statCard:focus-visible {
 
 .activityBadge {
   flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  line-height: 1.5;
 }
 
 /* 活动行成功态降噪（绿点 + 灰字，替代全绿徽章） */
@@ -1581,6 +1764,7 @@ button.statCard:focus-visible {
   display: inline-flex;
   align-items: center;
   gap: 5px;
+  line-height: 1.5;
   font-size: 11px;
   color: var(--dsw-alias-label-tertiary);
   white-space: nowrap;
@@ -1596,7 +1780,7 @@ button.statCard:focus-visible {
 .factCell {
   display: flex;
   flex-direction: column;
-  gap: 1px;
+  gap: 2px;
   min-width: 0;
 }
 
@@ -1619,13 +1803,14 @@ button.statCard:focus-visible {
 .sectionGrid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 0 24px;
+  gap: 0 28px;
 }
 
 .sectionRow {
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto 56px;
   align-items: center;
-  gap: 8px;
+  gap: 10px;
   padding: 4px 0;
   border-bottom: 1px solid color-mix(in srgb, var(--dsw-alias-border-l1) 55%, transparent);
   font-size: 11.5px;
@@ -1637,7 +1822,6 @@ button.statCard:focus-visible {
 }
 
 .sectionName {
-  flex: 1 1 auto;
   min-width: 0;
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-size: 11px;
@@ -1648,18 +1832,19 @@ button.statCard:focus-visible {
 }
 
 .sectionCount {
-  flex: none;
+  justify-self: end;
   color: var(--dsw-alias-label-tertiary);
   font-size: 10.5px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
 
 .sectionSize {
-  flex: none;
-  width: 52px;
-  text-align: right;
+  justify-self: end;
   font-size: 10.5px;
   color: var(--dsw-alias-label-secondary);
   font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
 
 /* CJK 断行纪律：插入语不劈词 */
@@ -1886,6 +2071,18 @@ button.statCard:focus-visible {
 .fillViewport .tableScroll {
   flex: 1 1 auto;
   max-height: none;
+}
+
+/* 稀疏步骤顶部对齐填充（导入「选择 ZIP」等内容极少的步骤）：
+   内容贴顶排布在剩余视口内，不再垂直居中（居中会让 CTA 悬在页面中段、与步骤条脱节）。 */
+.sparseFill {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: flex-start;
+  gap: 10px;
+  min-height: 280px;
 }
 
 /* 导出分组目录（两列致密勾选网格） */

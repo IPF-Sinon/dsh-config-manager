@@ -36,6 +36,10 @@ import type { UiT } from '../../ui/i18n.ts'
 import type { SectionId } from '../../schema/types.ts'
 import { Badge, Banner, Button, Card, Checkbox, SectionTitle, Spinner } from '../common/ui.tsx'
 import { ErrorBanner } from '../common/ErrorBanner.tsx'
+import { toast } from '../common/toast-store.ts'
+import { redact } from '../../security/redaction.ts'
+import { Modal } from '../common/Modal.tsx'
+import { RefreshIcon } from '../common/Icon.tsx'
 import { runStore, toSyncStoreSlice, type SyncConfirmDecisions, type SyncStoreSlice } from '../run-store.ts'
 import { SYNC_CREDENTIAL_REF, SYNC_WEBDAV_CREDENTIAL_REF } from './sync-api.ts'
 import type {
@@ -105,6 +109,12 @@ interface SyncUiState {
   confirmDecisions: SyncConfirmDecisions | null
   /** 最近一次一键同步执行结果（回滚入口） */
   lastRestoreId: string | null
+  /**
+   * 动作失败文案（R-20 后**不再作为展示通道**）。
+   * 保留该字段仅因 run-store 的 SyncStoreSlice 结构契约要求（toSyncStoreSlice 读取它，
+   * 而 run-store.ts 不在本任务改动范围）；失败反馈已全部改走 Toast（见下方各 catch 分支），
+   * 因此不再写入消息，页面也没有对应渲染点。
+   */
   error: string | null
   /** GitHub OAuth device flow 状态（flowId/userCode 仅内存，token 只存宿主） */
   github: GithubUiState
@@ -320,7 +330,8 @@ export function SyncSettingsView({ api, t }: SyncSettingsViewProps) {
         autosync: all.webdav, autosyncEnabled: all.webdav.enabled, autosyncInterval: all.webdav.interval,
       })
     } catch (err) {
-      patch({ error: err instanceof Error ? err.message : String(err) })
+      // R-20：读取自动同步状态失败（此前写入页面最底部的共享 error Banner，常滚出视野）
+      toast.error(`${t('toast.autosyncLoadFailed')}：${redact(err instanceof Error ? err.message : String(err))}`)
     }
   }
 
@@ -329,8 +340,9 @@ export function SyncSettingsView({ api, t }: SyncSettingsViewProps) {
    * urlOverride / channelOverride：挂载时地址刚从 status 回填、state.patch 尚未生效，
    * 直接传 info 的地址与通道避免竞态读旧值；缺省读当前 state。
    * 无远端地址时静默跳过（不发无效请求，下拉留空）。
-   */
-  const loadSnapshots = async (urlOverride?: string, channelOverride?: SyncChannel): Promise<void> => {
+   * announce：仅用户主动点「刷新快照」时为 true —— 成功给出回执，避免用户
+   * 在「远端确实没有快照」与「刷新没生效」之间无从判断（M-18）。 */
+  const loadSnapshots = async (urlOverride?: string, channelOverride?: SyncChannel, announce = false): Promise<void> => {
     const ch = channelOverride ?? stateRef.current.channel
     if (loadingSnapshotsRef.current[ch]) return
     loadingSnapshotsRef.current[ch] = true
@@ -358,8 +370,12 @@ export function SyncSettingsView({ api, t }: SyncSettingsViewProps) {
         })
         patchChannelState('git', { snapshots: res.snapshots })
       }
-    } catch {
-      // 拉取失败不阻断主流程（下拉留空，用户可重试）
+      // M-18：用户主动点「刷新快照」成功后的回执（自动拉取/切换通道时不打扰）
+      if (announce) toast.ok(t('toast.snapshotsRefreshed'))
+    } catch (err) {
+      // M-18/M-21：拉取远端快照失败原先完全静默（下拉留空），用户无法区分
+      // 「远端确实没有快照」与「读取失败」。不阻断主流程，仅以 Toast 如实告知。
+      toast.error(`${t('toast.snapshotsLoadFailed')}：${redact(err instanceof Error ? err.message : String(err))}`)
     } finally {
       loadingSnapshotsRef.current[ch] = false
       patchChannelState(ch, { loadingSnapshots: false })
@@ -433,14 +449,16 @@ export function SyncSettingsView({ api, t }: SyncSettingsViewProps) {
   }
 
   /** 实际发送保存请求：成功清空已入库的 password/token（与 push 一致）并刷新凭据徽章；
-   *  失败保留表单值以便重试。防重入：保存中又排入新改动 → 完成后自动补发最新 payload。 */
-  const doSaveConfig = async (payloadToSave: SyncPushPayload): Promise<void> => {
+   *  失败保留表单值以便重试。防重入：保存中又排入新改动 → 完成后自动补发最新 payload。
+   *  announce：仅「手动点保存」为 true —— 自动保存（输入防抖）成功时不弹 Toast，
+   *  否则每次停顿改字段都会刷一条通知；但**失败必须始终提示**（用户的改动没落盘）。 */
+  const doSaveConfig = async (payloadToSave: SyncPushPayload, announce = false): Promise<void> => {
     if (savingRef.current) {
       pendingSave.current = payloadToSave
       return
     }
     savingRef.current = true
-    patch({ savingConfig: true, error: null })
+    patch({ savingConfig: true })
     try {
       const saved = await api.saveConfig(payloadToSave)
       // 基于 stateRef 计算（同步权威），经 commit 落库：即使保存完成时组件已卸载
@@ -470,19 +488,23 @@ export function SyncSettingsView({ api, t }: SyncSettingsViewProps) {
         next.statusInfo = info
       }
       commit(next)
+      // M-17：手动保存成功给出回执（自动保存静默，避免输入防抖刷屏）
+      if (announce) toast.ok(t('toast.configSaved'))
       // 手动填入的 git token 保存成功 → 校验有效性（有效则隐藏 GitHub 登录块）
       if (payloadToSave.transport !== 'webdav' && saved.credentialConfigured) {
         void validateGithub()
       }
     } catch (err) {
-      patch({ savingConfig: false, error: err instanceof Error ? err.message : String(err) })
+      // R-20：保存失败**始终**提示（无论手动还是自动）——用户的改动没有落盘
+      toast.error(`${t('toast.configSaveFailed')}：${redact(err instanceof Error ? err.message : String(err))}`)
+      patch({ savingConfig: false })
     } finally {
       savingRef.current = false
       // 保存期间又排入的新改动 → 立即补发（保底，不丢输入）
       if (pendingSave.current !== null) {
         const p = pendingSave.current
         pendingSave.current = null
-        void doSaveConfig(p)
+        void doSaveConfig(p, announce)
       }
     }
   }
@@ -502,8 +524,9 @@ export function SyncSettingsView({ api, t }: SyncSettingsViewProps) {
     }, 600)
   }
 
-  /** 立即保存（「保存配置」按钮 / 防抖到点）：优先待发改动，否则按当前表单值。 */
-  const flushConfigSave = (): void => {
+  /** 立即保存（「保存配置」按钮 / 防抖到点）：优先待发改动，否则按当前表单值。
+   *  announce：仅手动点按钮为 true —— 自动保存成功不弹回执（见 doSaveConfig）。 */
+  const flushConfigSave = (announce = false): void => {
     if (saveTimer.current !== null) {
       clearTimeout(saveTimer.current)
       saveTimer.current = null
@@ -511,8 +534,12 @@ export function SyncSettingsView({ api, t }: SyncSettingsViewProps) {
     const pending = pendingSave.current
     pendingSave.current = null
     const payloadToSave = pending ?? buildConfigPayload(stateRef.current)
-    if (payloadToSave === null) return
-    void doSaveConfig(payloadToSave)
+    if (payloadToSave === null) {
+      // M-17：手动点保存但地址未填写 → 此前直接 return（按钮看起来无反应），现给出明确提示
+      if (announce) toast.info(t('toast.configNothingToSave'))
+      return
+    }
+    void doSaveConfig(payloadToSave, announce)
   }
 
   /* ------------------------------------------------ GitHub OAuth device flow */
@@ -632,18 +659,20 @@ export function SyncSettingsView({ api, t }: SyncSettingsViewProps) {
 
   /** P0-②：push 前只读预览（弹窗确认流程第一步）——不写远端，只展示「将推送什么」。 */
   const runPushPreview = async (): Promise<void> => {
-    patch({ busy: 'push', error: null, pushReport: null, pullReport: null })
+    patch({ busy: 'push', pushReport: null, pullReport: null })
     try {
       const preview = await api.pushPreview(buildPushPayload())
       patch({ busy: null, pushPreview: { preview, open: true } })
     } catch (err) {
-      patch({ busy: null, error: err instanceof Error ? err.message : String(err) })
+      // R-20：预览失败（此前写共享 error Banner，渲染在页面最底部而按钮在中部）
+      patch({ busy: null })
+      toast.error(`${t('toast.pushPreviewFailed')}：${redact(err instanceof Error ? err.message : String(err))}`)
     }
   }
 
   /** P0-②：确认弹窗里点「确认推送」→ 真正推送（复用既有 push 语义）。 */
   const runPush = async (): Promise<void> => {
-    patch({ busy: 'push', error: null, pushReport: null, pullReport: null })
+    patch({ busy: 'push', pushReport: null, pullReport: null })
     try {
       const report = await api.push(buildPushPayload())
       // 成功即清空 token/webdavPassword/加密密码（已安全使用完；绝不持久化）；失败保留以便重试
@@ -655,15 +684,21 @@ export function SyncSettingsView({ api, t }: SyncSettingsViewProps) {
       })
       if (report.ok) {
         patchChannel({ encryptPassword: '', encryptPasswordConfirm: '' })
+        // M-19：推送终局回执（结果弹窗关闭后不再有任何痕迹）
+        toast.ok(t('toast.pushDone'))
         void loadSnapshots()
+      } else {
+        // 失败保留结果弹窗（K-15，含告警明细）；同时给出不依赖弹窗的回执
+        toast.error(t('toast.pushFailed'))
       }
     } catch (err) {
-      patch({ busy: null, error: err instanceof Error ? err.message : String(err) })
+      patch({ busy: null })
+      toast.error(`${t('toast.pushFailed')}：${redact(err instanceof Error ? err.message : String(err))}`)
     }
   }
 
   const runPull = async (): Promise<void> => {
-    patch({ busy: 'pull', error: null, pullReport: null, pushReport: null })
+    patch({ busy: 'pull', pullReport: null, pushReport: null })
     try {
       // 解密密码（可选）：拉取加密快照时提供；仅内存传输
       const decrypt =
@@ -671,8 +706,11 @@ export function SyncSettingsView({ api, t }: SyncSettingsViewProps) {
       const report = await api.pull({ ...payload(), ...decrypt })
       patch({ busy: null, pullReport: report, token: '', webdavPassword: '' })
       patchChannel({ decryptPassword: '' })
+      // M-19：拉取终局回执（弹窗关闭后无痕迹）
+      toast.ok(t('toast.pullDone'))
     } catch (err) {
-      patch({ busy: null, error: err instanceof Error ? err.message : String(err) })
+      patch({ busy: null })
+      toast.error(`${t('toast.pullFailed')}：${redact(err instanceof Error ? err.message : String(err))}`)
     }
   }
 
@@ -684,7 +722,8 @@ export function SyncSettingsView({ api, t }: SyncSettingsViewProps) {
     try {
       await api.saveSelection({ transport: state.channel, mode, sections, encrypt, includeSecrets })
     } catch (err) {
-      patch({ error: err instanceof Error ? err.message : String(err) })
+      // R-20/M-22：同步设置持久化失败（此前写共享 error Banner，与刚点的模式页签相距整屏）
+      toast.error(`${t('toast.selectionSaveFailed')}：${redact(err instanceof Error ? err.message : String(err))}`)
     }
   }
 
@@ -742,7 +781,7 @@ export function SyncSettingsView({ api, t }: SyncSettingsViewProps) {
     if (state.confirmSession !== null) {
       try { await api.cancel(state.confirmSession.syncSessionId) } catch { /* 尽力清理 */ }
     }
-    patch({ busy: 'sync', error: null, confirmSession: null, confirmDecisions: null, lastRestoreId: null })
+    patch({ busy: 'sync', confirmSession: null, confirmDecisions: null, lastRestoreId: null })
     try {
       // 解密密码（可选）：一键同步拉取加密快照时提供；仅内存传输
       const decrypt =
@@ -753,14 +792,17 @@ export function SyncSettingsView({ api, t }: SyncSettingsViewProps) {
         ...decrypt,
       })
       if (!session.ok) {
-        patch({ busy: null, error: session.message ?? t('syncflow.syncFailed') })
+        // R-20：一键同步启动失败（宿主明确回报 message，无异常抛出）
+        patch({ busy: null })
+        toast.error(`${t('toast.syncStartFailed')}：${redact(session.message ?? t('syncflow.syncFailed'))}`)
         return
       }
       patch({ busy: null, confirmSession: session, confirmDecisions: null, token: '', webdavPassword: '' })
       patchChannel({ decryptPassword: '' })
       void loadSnapshots()
     } catch (err) {
-      patch({ busy: null, error: err instanceof Error ? err.message : String(err) })
+      patch({ busy: null })
+      toast.error(`${t('toast.syncStartFailed')}：${redact(err instanceof Error ? err.message : String(err))}`)
     }
   }
 
@@ -789,24 +831,26 @@ export function SyncSettingsView({ api, t }: SyncSettingsViewProps) {
   /* ------------------------------------------------ 自动同步（按通道） */
 
   const toggleAutosync = async (enabled: boolean): Promise<void> => {
-    patch({ error: null })
     patchChannel({ autosyncEnabled: enabled })
     try {
       const updated = await api.autosyncUpdate({ transport: state.channel, enabled, interval: chState.autosyncInterval })
       patchChannel({ autosync: updated, autosyncEnabled: updated.enabled, autosyncInterval: updated.interval })
+      // M-20：乐观更新已生效，补一条终局回执确认宿主已受理
+      toast.ok(t('toast.autosyncUpdated'))
     } catch (err) {
-      patch({ error: err instanceof Error ? err.message : String(err) })
+      // R-20/M-20：失败必须提示 —— 界面是乐观更新，用户会以为开关已生效
+      toast.error(`${t('toast.autosyncUpdateFailed')}：${redact(err instanceof Error ? err.message : String(err))}`)
     }
   }
 
   const updateAutosyncInterval = async (interval: AutosyncInterval): Promise<void> => {
-    patch({ error: null })
     patchChannel({ autosyncInterval: interval })
     try {
       const updated = await api.autosyncUpdate({ transport: state.channel, enabled: chState.autosyncEnabled, interval })
       patchChannel({ autosync: updated, autosyncEnabled: updated.enabled, autosyncInterval: updated.interval })
+      toast.ok(t('toast.autosyncUpdated'))
     } catch (err) {
-      patch({ error: err instanceof Error ? err.message : String(err) })
+      toast.error(`${t('toast.autosyncUpdateFailed')}：${redact(err instanceof Error ? err.message : String(err))}`)
     }
   }
 
@@ -839,6 +883,18 @@ export function SyncSettingsView({ api, t }: SyncSettingsViewProps) {
   return (
     <div className={css.viewBody}>
       <SectionTitle title={t('section.label')} subtitle={t('section.description')} />
+
+          {/* M-16：页面级加载失败就地提示（此前 loadError 只写不读，宿主不可达时整页显示
+              「未配置」假象）。此处保留可就地重试的 ErrorBanner —— 它是**页面是否可用**
+              的前提条件，必须常驻到用户重试成功，不能交给会自动消失的 Toast。 */}
+          {state.loadError !== null && (
+            <ErrorBanner
+              error={`${t('load.failed')}：${redact(state.loadError)}`}
+              onRetry={() => { void loadStatus() }}
+              retrying={state.loading}
+              t={api.t}
+            />
+          )}
 
           {/* 同步通道入口卡：通道配置改为弹窗驱动（点按钮 → 弹窗内配置 Git/WebDAV 通道；
               弹窗样式复用市场操作弹窗体系，DESIGN.md §8.12） */}
@@ -897,26 +953,21 @@ export function SyncSettingsView({ api, t }: SyncSettingsViewProps) {
             </div>
           </Card>
 
-          {/* 通道配置弹窗（操作弹窗体系：dialogMask + dialogCard dialogWide + 标题行 + 关闭 × + 正文限高内滚） */}
-          {channelOpen && (
-            <div
-              className={css.dialogMask}
-              onMouseDown={(e) => { if (e.target === e.currentTarget && !state.savingConfig) closeChannelDialog() }}
-            >
-              <div className={`${css.dialogCard} ${css.dialogWide}`} role="dialog" aria-modal="true" aria-label={t('channel.title')}>
-                <div className={css.dialogHeaderRow}>
-                  <span className={css.dialogHeader}>{t('channel.title')}</span>
-                  <button
-                    type="button"
-                    className={css.dialogClose}
-                    aria-label={t('common.close')}
-                    disabled={state.savingConfig}
-                    onClick={closeChannelDialog}
-                  >
-                    ×
-                  </button>
-                </div>
-                <div className={css.dialogBodyScroll}>
+          {/* 通道配置弹窗（Radix Modal 统一 a11y：focus-trap / Esc / 焦点还原 / 滚动锁；
+              内含推送预览/推送结果/拉取结果/一键同步确认四个嵌套 Modal，Radix 支持嵌套弹窗） */}
+          <Modal
+            open={channelOpen}
+            onClose={closeChannelDialog}
+            title={t('channel.title')}
+            wide
+            busy={state.savingConfig}
+          >
+            <Modal.Header
+              title={t('channel.title')}
+              onClose={closeChannelDialog}
+              closeDisabled={state.savingConfig}
+            />
+            <Modal.Body scroll>
 
           {/* 通道子 tab：GitHub / WebDAV（modeTabs 样式；两通道设置各自独立） */}
           <div className={css.modeTabs} role="tablist">
@@ -1107,21 +1158,19 @@ export function SyncSettingsView({ api, t }: SyncSettingsViewProps) {
               </>
             )}
 
-            {/* 配置保存：改动自动保存（防抖）；按钮提供立即保存与明确反馈 */}
+            {/* 配置保存：改动自动保存（防抖，静默）；按钮立即保存并给出 Toast 回执（announce=true） */}
             <div className={css.actionRow}>
               <Button
                 variant="primary"
                 disabled={state.busy !== null || state.savingConfig || !remoteReady}
-                onClick={() => { flushConfigSave() }}
+                onClick={() => { flushConfigSave(true) }}
               >
                 {state.savingConfig ? <Spinner label={t('config.saving')} /> : t('config.save')}
               </Button>
             </div>
             <span className={css.hint}>{t('config.saveHint')}</span>
-                </div>
-              </div>
-            </div>
-          )}
+            </Modal.Body>
+          </Modal>
 
           {/* 同步模式（当前通道）：默认（快速导出）/ 高级（自定义导出） */}
           <Card>
@@ -1315,18 +1364,20 @@ export function SyncSettingsView({ api, t }: SyncSettingsViewProps) {
             </label>
             <Button
               disabled={state.busy !== null || chState.loadingSnapshots || !remoteReady}
-              onClick={() => { void loadSnapshots() }}
+              onClick={() => { void loadSnapshots(undefined, undefined, true) }}
               title={t('syncflow.refreshSnapshots')}
             >
               {chState.loadingSnapshots ? (
                 <Spinner label={t('syncflow.refreshingSnapshots')} />
               ) : (
-                `🔄 ${t('syncflow.refreshSnapshots')}`
+                <><RefreshIcon size={14} /> {t('syncflow.refreshSnapshots')}</>
               )}
             </Button>
           </div>
 
-          {state.error !== null && <ErrorBanner error={state.error} />}
+          {/* R-20：原 `{state.error !== null && <ErrorBanner error={state.error} />}` 已移除 ——
+              该字段承载 10+ 个动作的失败、渲染在全部卡片之后（用户触发点常在其上方视野外），
+              且同文案会被 Toast 去重合并。现按动作分文案走右下角 Toast（见上方各 catch 分支）。 */}
 
           {/* 自动同步设置（当前通道） */}
           <Card>
@@ -1374,210 +1425,160 @@ export function SyncSettingsView({ api, t }: SyncSettingsViewProps) {
           {/* P2：同步历史视图（Host /sync/history 端点；全局，含两通道记录） */}
           <SyncHistoryView api={api} t={t} />
 
-          {/* P0-②：push 前只读预览确认弹窗（「将推送什么」→ 确认后才真正上传） */}
-          {/* 推送预览确认弹窗 */}
-          {state.pushPreview.open && (
-            <div
-              className={css.dialogMask}
-              onMouseDown={(e) => {
-                if (e.target === e.currentTarget && state.busy !== 'push') {
-                  patch({ pushPreview: { preview: null, open: false } })
-                }
-              }}
-            >
-              <div className={`${css.dialogCard} ${css.dialogWide}`} role="dialog" aria-modal="true" aria-label={t('syncflow.pushPreviewTitle')}>
-                <div className={css.dialogHeaderRow}>
-                  <span className={css.dialogHeader}>{t('syncflow.pushPreviewTitle')}</span>
-                  <button
-                    type="button"
-                    className={css.dialogClose}
-                    aria-label={t('common.close')}
-                    disabled={state.busy === 'push'}
-                    onClick={() => { patch({ pushPreview: { preview: null, open: false } }) }}
-                  >
-                    ×
-                  </button>
-                </div>
-                <div className={css.dialogBodyScroll}>
-                  <PushPreviewCard preview={state.pushPreview.preview} t={t} uiT={uiT} />
-                  <div className={css.actionRow}>
-                    <Button
-                      variant="ghost"
-                      disabled={state.busy === 'push'}
-                      onClick={() => { patch({ pushPreview: { preview: null, open: false } }) }}
-                    >
-                      {t('syncflow.cancel')}
-                    </Button>
-                    <Button
-                      variant="primary"
-                      disabled={state.busy === 'push'}
-                      onClick={() => { void runPush() }}
-                    >
-                      {state.busy === 'push' ? <Spinner label={t('syncflow.pushing')} /> : t('syncflow.pushConfirm')}
-                    </Button>
-                  </div>
-                </div>
-              </div>
-            </div>
-          )}
-
-          {/* 推送结果弹窗 */}
-          {state.pushReport !== null && pushView !== null && (
-            <div
-              className={css.dialogMask}
-              onMouseDown={(e) => {
-                if (e.target === e.currentTarget) {
-                  patch({ pushReport: null })
-                }
-              }}
-            >
-              <div className={`${css.dialogCard} ${css.dialogWide}`} style={{ width: 'min(640px, 100%)', maxHeight: '85vh' }} role="dialog" aria-modal="true" aria-label={t('push.title')}>
-                <div className={css.dialogHeaderRow}>
-                  <span className={css.dialogHeader}>{t('push.title')}</span>
-                  <button
-                    type="button"
-                    className={css.dialogClose}
-                    onClick={() => { patch({ pushReport: null }) }}
-                    aria-label={t('common.close')}
-                  >
-                    ×
-                  </button>
-                </div>
-                <div className={css.dialogBodyScroll} style={{ maxHeight: '70vh' }}>
-                  <Banner kind={pushView.kind === 'ok' ? 'ok' : 'error'}>{pushView.headline}</Banner>
-                  {pushView.sections.length > 0 && (
-                    <div>
-                      <span className={css.fieldLabel}>{t('sections.title')}</span>
-                      <div className={css.statRow}>
-                        {pushView.sections.map((s) => <Badge key={s} kind="info">{s}</Badge>)}
-                      </div>
-                    </div>
-                  )}
-                  {pushView.warnings.length > 0 && (
-                    <div>
-                      <span className={css.fieldLabel}>{t('warnings.title')}</span>
-                      <ul className={css.warnList}>
-                        {pushView.warnings.map((w, i) => <li key={i}>{w}</li>)}
-                      </ul>
-                    </div>
-                  )}
-                  <div className={css.actionRow} style={{ marginTop: '12px' }}>
-                    <Button variant="primary" onClick={() => { patch({ pushReport: null }) }}>
-                      {t('common.close')}
-                    </Button>
-                  </div>
-                </div>
-              </div>
-            </div>
-          )}
-
-          {/* 拉取差异预览弹窗 */}
-          {state.pullReport !== null && pullView !== null && (
-            <div
-              className={css.dialogMask}
-              onMouseDown={(e) => {
-                if (e.target === e.currentTarget) {
-                  patch({ pullReport: null })
-                }
-              }}
-            >
-              <div className={`${css.dialogCard} ${css.dialogWide}`} style={{ width: 'min(720px, 100%)', maxHeight: '85vh' }} role="dialog" aria-modal="true" aria-label={t('pull.title')}>
-                <div className={css.dialogHeaderRow}>
-                  <span className={css.dialogHeader}>{t('pull.title')}</span>
-                  <button
-                    type="button"
-                    className={css.dialogClose}
-                    onClick={() => { patch({ pullReport: null }) }}
-                    aria-label={t('common.close')}
-                  >
-                    ×
-                  </button>
-                </div>
-                <div className={css.dialogBodyScroll} style={{ maxHeight: '70vh' }}>
-                  <Banner kind={pullView.kind === 'ok' ? 'info' : pullView.kind === 'empty' ? 'ok' : 'error'}>
-                    {pullView.headline}
-                  </Banner>
-                  {pullView.summary !== null && (
-                    <>
-                      <div className={css.statRow}>
-                        <Badge kind="info">{t('change.total', { total: pullView.summary.total })}</Badge>
-                        {pullView.summary.error > 0 && <Badge kind="error">{severityLabel('error', uiT)} × {pullView.summary.error}</Badge>}
-                        {pullView.summary.warning > 0 && <Badge kind="warn">{severityLabel('warning', uiT)} × {pullView.summary.warning}</Badge>}
-                        {pullView.summary.info > 0 && <Badge kind="info">{severityLabel('info', uiT)} × {pullView.summary.info}</Badge>}
-                      </div>
-                      {pullView.summary.needsReview && <Banner kind="warn">{t('pull.needsReview')}</Banner>}
-                      <div className={css.pullScroll}>
-                        <div className={css.reportList}>
-                          {pullView.summary.items.map((c) => (
-                            <div key={c.id} className={css.statRow}>
-                              <span className={css.kindTag}>{kindLabel(c.kind, uiT)}</span>
-                              <Badge kind={c.severity === 'error' ? 'error' : c.severity === 'warning' ? 'warn' : 'info'}>
-                                {severityLabel(c.severity, uiT)}
-                              </Badge>
-                              <span>{c.description}</span>
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-                    </>
-                  )}
-                  {pullView.previewHint !== '' && <Banner kind="info">{pullView.previewHint}</Banner>}
-                  <div className={css.actionRow} style={{ marginTop: '12px' }}>
-                    <Button variant="primary" onClick={() => { patch({ pullReport: null }) }}>
-                      {t('common.close')}
-                    </Button>
-                  </div>
-                </div>
-              </div>
-            </div>
-          )}
-
-          {/* 一键同步差异确认弹窗 */}
-          {state.confirmSession !== null && (
-            <div
-              className={css.dialogMask}
-              onMouseDown={(e) => {
-                if (e.target === e.currentTarget && state.busy !== 'sync') {
-                  cancelConfirm()
-                }
-              }}
-            >
-              <div
-                className={`${css.dialogCard} ${css.dialogWide}`}
-                style={{ width: 'min(820px, 100%)', maxHeight: '85vh' }}
-                role="dialog"
-                aria-modal="true"
-                aria-label={t('syncflow.title')}
+          {/* P0-②：push 前只读预览确认弹窗（「将推送什么」→ 确认后才真正上传；Radix Modal） */}
+          <Modal
+            open={state.pushPreview.open}
+            onClose={() => { patch({ pushPreview: { preview: null, open: false } }) }}
+            title={t('syncflow.pushPreviewTitle')}
+            wide
+            busy={state.busy === 'push'}
+          >
+            <Modal.Header
+              title={t('syncflow.pushPreviewTitle')}
+              onClose={() => { patch({ pushPreview: { preview: null, open: false } }) }}
+              closeDisabled={state.busy === 'push'}
+            />
+            <Modal.Body scroll>
+              <PushPreviewCard preview={state.pushPreview.preview} t={t} uiT={uiT} />
+            </Modal.Body>
+            <Modal.Footer>
+              <Button
+                variant="ghost"
+                disabled={state.busy === 'push'}
+                onClick={() => { patch({ pushPreview: { preview: null, open: false } }) }}
               >
-                <div className={css.dialogHeaderRow}>
-                  <span className={css.dialogHeader}>{t('syncflow.title')}</span>
-                  <button
-                    type="button"
-                    className={css.dialogClose}
-                    onClick={cancelConfirm}
-                    aria-label={t('common.close')}
-                  >
-                    ×
-                  </button>
-                </div>
-                <div className={css.dialogBodyScroll} style={{ maxHeight: '72vh' }}>
-                  <SyncConfirmView
-                    api={api}
-                    syncSessionId={state.confirmSession.syncSessionId}
-                    snapshotId={state.confirmSession.snapshotId}
-                    items={state.confirmSession.items}
-                    needsReview={state.confirmSession.needsReview}
-                    compatibility={state.confirmSession.compatibility}
-                    t={t}
-                    decisions={state.confirmDecisions}
-                    onDecisionsChange={(d) => { patch({ confirmDecisions: d }) }}
-                    onCancel={cancelConfirm}
-                    onRollbackDone={onRollbackApplied}
-                  />
-                </div>
-              </div>
-            </div>
-          )}
+                {t('syncflow.cancel')}
+              </Button>
+              <Button
+                variant="primary"
+                disabled={state.busy === 'push'}
+                onClick={() => { void runPush() }}
+              >
+                {state.busy === 'push' ? <Spinner label={t('syncflow.pushing')} /> : t('syncflow.pushConfirm')}
+              </Button>
+            </Modal.Footer>
+          </Modal>
+
+          {/* 推送结果弹窗（Radix Modal） */}
+          <Modal
+            open={state.pushReport !== null && pushView !== null}
+            onClose={() => { patch({ pushReport: null }) }}
+            title={t('push.title')}
+            cardStyle={{ width: 'min(640px, 100%)', maxHeight: '85vh' }}
+          >
+            <Modal.Header
+              title={t('push.title')}
+              onClose={() => { patch({ pushReport: null }) }}
+            />
+            <Modal.Body scroll style={{ maxHeight: '70vh' }}>
+              {pushView !== null && (<>
+                <Banner kind={pushView.kind === 'ok' ? 'ok' : 'error'}>{pushView.headline}</Banner>
+                {pushView.sections.length > 0 && (
+                  <div>
+                    <span className={css.fieldLabel}>{t('sections.title')}</span>
+                    <div className={css.statRow}>
+                      {pushView.sections.map((s) => <Badge key={s} kind="info">{s}</Badge>)}
+                    </div>
+                  </div>
+                )}
+                {pushView.warnings.length > 0 && (
+                  <div>
+                    <span className={css.fieldLabel}>{t('warnings.title')}</span>
+                    <ul className={css.warnList}>
+                      {pushView.warnings.map((w, i) => <li key={i}>{w}</li>)}
+                    </ul>
+                  </div>
+                )}
+              </>)}
+            </Modal.Body>
+            <Modal.Footer>
+              <Button variant="primary" onClick={() => { patch({ pushReport: null }) }}>
+                {t('common.close')}
+              </Button>
+            </Modal.Footer>
+          </Modal>
+
+          {/* 拉取差异预览弹窗（Radix Modal） */}
+          <Modal
+            open={state.pullReport !== null && pullView !== null}
+            onClose={() => { patch({ pullReport: null }) }}
+            title={t('pull.title')}
+            cardStyle={{ width: 'min(720px, 100%)', maxHeight: '85vh' }}
+          >
+            <Modal.Header
+              title={t('pull.title')}
+              onClose={() => { patch({ pullReport: null }) }}
+            />
+            <Modal.Body scroll style={{ maxHeight: '70vh' }}>
+              {pullView !== null && (<>
+                <Banner kind={pullView.kind === 'ok' ? 'info' : pullView.kind === 'empty' ? 'ok' : 'error'}>
+                  {pullView.headline}
+                </Banner>
+                {pullView.summary !== null && (
+                  <>
+                    <div className={css.statRow}>
+                      <Badge kind="info">{t('change.total', { total: pullView.summary.total })}</Badge>
+                      {pullView.summary.error > 0 && <Badge kind="error">{severityLabel('error', uiT)} × {pullView.summary.error}</Badge>}
+                      {pullView.summary.warning > 0 && <Badge kind="warn">{severityLabel('warning', uiT)} × {pullView.summary.warning}</Badge>}
+                      {pullView.summary.info > 0 && <Badge kind="info">{severityLabel('info', uiT)} × {pullView.summary.info}</Badge>}
+                    </div>
+                    {pullView.summary.needsReview && <Banner kind="warn">{t('pull.needsReview')}</Banner>}
+                    <div className={css.pullScroll}>
+                      <div className={css.reportList}>
+                        {pullView.summary.items.map((c) => (
+                          <div key={c.id} className={css.statRow}>
+                            <span className={css.kindTag}>{kindLabel(c.kind, uiT)}</span>
+                            <Badge kind={c.severity === 'error' ? 'error' : c.severity === 'warning' ? 'warn' : 'info'}>
+                              {severityLabel(c.severity, uiT)}
+                            </Badge>
+                            <span>{c.description}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  </>
+                )}
+                {pullView.previewHint !== '' && <Banner kind="info">{pullView.previewHint}</Banner>}
+              </>)}
+            </Modal.Body>
+            <Modal.Footer>
+              <Button variant="primary" onClick={() => { patch({ pullReport: null }) }}>
+                {t('common.close')}
+              </Button>
+            </Modal.Footer>
+          </Modal>
+
+          {/* 一键同步差异确认弹窗（Radix Modal；SyncConfirmView 内含取消/确认按钮） */}
+          <Modal
+            open={state.confirmSession !== null}
+            onClose={cancelConfirm}
+            title={t('syncflow.title')}
+            cardStyle={{ width: 'min(820px, 100%)', maxHeight: '85vh' }}
+            busy={state.busy === 'sync'}
+          >
+            <Modal.Header
+              title={t('syncflow.title')}
+              onClose={cancelConfirm}
+              closeDisabled={state.busy === 'sync'}
+            />
+            <Modal.Body scroll style={{ maxHeight: '72vh' }}>
+              {state.confirmSession !== null && (
+                <SyncConfirmView
+                  api={api}
+                  syncSessionId={state.confirmSession.syncSessionId}
+                  snapshotId={state.confirmSession.snapshotId}
+                  items={state.confirmSession.items}
+                  needsReview={state.confirmSession.needsReview}
+                  compatibility={state.confirmSession.compatibility}
+                  t={t}
+                  decisions={state.confirmDecisions}
+                  onDecisionsChange={(d) => { patch({ confirmDecisions: d }) }}
+                  onCancel={cancelConfirm}
+                  onRollbackDone={onRollbackApplied}
+                />
+              )}
+            </Modal.Body>
+          </Modal>
     </div>
   )
 }

@@ -97,6 +97,16 @@ export default defineConfig({
   target: 'es2022',
   deps: {
     neverBundle: ['react', 'react-dom', 'react-dom/client', 'react/jsx-runtime'],
+    // lucide-react / @radix-ui/* are runtime `dependencies`, which tsdown would
+    // otherwise externalize (→ require("lucide-react") at runtime, but the DSH
+    // loader only fetches this single client.js and supplies no such module).
+    // Force-bundle them so the single-file cjs carries its own icons/primitives.
+    // NOTE: tsdown 0.22 uses `deps.alwaysBundle` (the old top-level `noExternal`
+    // is read from config root, not from `deps`, so it was silently ignored here).
+    // The regex covers lucide-react's per-icon deep imports (`lucide-react/dist/esm/icons/*.mjs`)
+    // which Icon.tsx uses for precise tree-shaking — without it they'd stay external and
+    // the DSH loader (single client.js, no such module) would fail at runtime.
+    alwaysBundle: [/^lucide-react(\/.*)?$/, /^@radix-ui\//],
   },
   plugins: [cssModulesPlugin()],
   sourcemap: true,

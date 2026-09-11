@@ -16,6 +16,7 @@ import { HistoryApi, type HistoryListResult, type HistoryExportFormat } from './
 import type { TranslateNS } from '../client-types.ts'
 import { Badge, Banner, Button, Card, Empty, SectionTitle } from '../common/ui.tsx'
 import { ErrorBanner } from '../common/ErrorBanner.tsx'
+import { toast } from '../common/toast-store.ts'
 import {
   resultBadgeKind, kindLabelKey, groupByKind, summarize,
   filterByText, applyRecent, HISTORY_KIND_OPTIONS, HISTORY_RESULT_OPTIONS,
@@ -34,8 +35,8 @@ interface PanelState {
   error: string | null
   result: HistoryListResult | null
   filter: HistoryFilter
+  /** 导出中的格式（瞬态；结果反馈走全局 Toast，不再占页内一行灰字） */
   exporting: 'json' | 'markdown' | null
-  exportNote: string | null
 }
 
 export function HistoryPanel({ historyApi, t }: HistoryPanelProps) {
@@ -45,7 +46,6 @@ export function HistoryPanel({ historyApi, t }: HistoryPanelProps) {
     result: null,
     filter: { query: '' },
     exporting: null,
-    exportNote: null,
   })
   const mounted = useRef(true)
   useEffect(() => {
@@ -69,15 +69,18 @@ export function HistoryPanel({ historyApi, t }: HistoryPanelProps) {
   }
 
   const handleExport = async (format: HistoryExportFormat): Promise<void> => {
-    setState((s) => ({ ...s, exporting: format, exportNote: null }))
+    setState((s) => ({ ...s, exporting: format }))
     try {
       await historyApi.exportReport(format, {
         kind: state.filter.kind,
         result: state.filter.result,
       })
-      if (mounted.current) setState((s) => ({ ...s, exporting: null, exportNote: t('history.exported') }))
+      // 成功/失败分 kind 走 Toast：原先两者共用同一行灰色 hint，失败与成功视觉上无法区分
+      toast.ok(t('history.exported'))
     } catch (error) {
-      if (mounted.current) setState((s) => ({ ...s, exporting: null, exportNote: `${t('history.exportError')}: ${redact(error instanceof Error ? error.message : String(error))}` }))
+      toast.error(`${t('history.exportError')}: ${redact(error instanceof Error ? error.message : String(error))}`)
+    } finally {
+      if (mounted.current) setState((s) => ({ ...s, exporting: null }))
     }
   }
 
@@ -182,7 +185,6 @@ export function HistoryPanel({ historyApi, t }: HistoryPanelProps) {
             {state.exporting === 'markdown' ? t('history.exporting') : t('history.export.markdown')}
           </Button>
         </div>
-        {state.exportNote !== null && <div className={css.hint}>{state.exportNote}</div>}
       </Card>
 
       {/* 空态 */}

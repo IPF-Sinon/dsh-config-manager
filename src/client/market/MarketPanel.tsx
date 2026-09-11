@@ -25,6 +25,8 @@ import type { ConfigManagerApi } from '../api.ts'
 import type { ImportResult, ImportPlan } from '../../core/types.ts'
 import type { SectionId } from '../../schema/types.ts'
 import { Badge, Banner, Button, Card, Empty, SectionTitle, Spinner } from '../common/ui.tsx'
+import { Modal } from '../common/Modal.tsx'
+import { toast } from '../common/toast-store.ts'
 import { BUILTIN_MARKET_URL } from '../../market/builtin.ts'
 import type { MarketApi } from './market-api.ts'
 import type { MyConfigsApi } from './my-configs-api.ts'
@@ -181,6 +183,11 @@ export function MarketPanel({ api, myConfigsApi, importApi, syncApi, t }: Market
   const [disclaimerKey, setDisclaimerKey] = useState<DisclaimerKey | null>(null)
   /** 免责弹窗「不再提示」勾选（每次打开重置） */
   const [dontAsk, setDontAsk] = useState(false)
+  /**
+   * K-07：未批准任何分区（表单内联校验，保留就地提示）。与 `state.error` 分流：
+   * `state.error` 只承载「动作失败」（改为全局 Toast），本提示紧邻导入按钮、修正勾选后立即消失。
+   */
+  const [noApprovalHint, setNoApprovalHint] = useState(false)
   /** localStorage（浏览器环境；免责「不再提示」跨会话持久化） */
   const storage: Pick<Storage, 'getItem' | 'setItem'> = window.localStorage
 
@@ -210,6 +217,7 @@ export function MarketPanel({ api, myConfigsApi, importApi, syncApi, t }: Market
   const closeDownload = (): void => {
     setDownloadOpen(false)
     patch({ detail: null, importResult: null, error: null, approvals: {} })
+    setNoApprovalHint(false)
   }
 
   /** 卸载时置挂载守卫 + 最后镜像一次（防止「最后一次改动后立即切 tab」时丢状态）。 */
@@ -247,35 +255,44 @@ export function MarketPanel({ api, myConfigsApi, importApi, syncApi, t }: Market
     void (async () => {
       const info = await loadStatus()
       if (info !== null && info.bootAutoRefreshed !== true) {
-        await runRefresh()
+        await runRefresh(false)
       }
     })()
     // api 为注入单例（注册时创建），生命周期内稳定；仅挂载时执行一次
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  /** 拉取内置市场最新 index.json → 重新浏览（缓存状态由 Host 合并） */
-  const runRefresh = async (): Promise<void> => {
+  /** 拉取内置市场最新 index.json → 重新浏览（缓存状态由 Host 合并）。
+   *  `announce`：仅手动点击才给成功回执 —— 启动时的自动刷新静默，
+   *  否则每次打开市场页都会弹一条用户没主动触发的通知。 */
+  const runRefresh = async (announce = true): Promise<void> => {
     patch({ refreshing: true, error: null, detail: null })
     try {
       // 先强制 re-pull index（refresh 返回目录条目），再用 browse 取缓存状态合并的展示列表。
       await api.refresh()
       const res: MarketBrowseResponse = await api.browse()
       patch({ refreshing: false, browsing: false, items: res.items, search: '', category: '' })
+      // M-25：刷新会清空搜索词与类别筛选，必须告知，否则用户以为列表内容丢了
+      if (announce) toast.ok(t('config.refreshed'))
       void loadStatus()
     } catch (err) {
+      // R-21：动作失败 → 全局 Toast（原页面 Banner 移除；error 仍落一次作失败标记）
       patch({ refreshing: false, error: err instanceof Error ? err.message : String(err) })
+      toast.error(redact(err instanceof Error ? err.message : String(err)))
     }
   }
 
   /** 浏览（不重新拉取）：POST /market/browse 合并 index + 缓存 */
-  const runBrowse = async (): Promise<void> => {
+  const runBrowse = async (announce = true): Promise<void> => {
     patch({ browsing: true, error: null })
     try {
       const res: MarketBrowseResponse = await api.browse()
       patch({ browsing: false, items: res.items, search: '', category: '' })
+      if (announce) toast.ok(t('list.browsed'))
     } catch (err) {
+      // R-21：动作失败 → 全局 Toast
       patch({ browsing: false, error: err instanceof Error ? err.message : String(err) })
+      toast.error(redact(err instanceof Error ? err.message : String(err)))
     }
   }
 
@@ -284,6 +301,7 @@ export function MarketPanel({ api, myConfigsApi, importApi, syncApi, t }: Market
    *  防止「弹窗标题是 B、详情是 A」的串扰。 */
   const runDownload = async (item: MarketListItem): Promise<void> => {
     patch({ downloadingId: item.id, error: null })
+    setNoApprovalHint(false) // 新会话：清掉上一次的「未批准」就地提示
     try {
       const detail = await api.download(item.id, item.repo)
       if (stateRef.current.downloadingId !== item.id) return
@@ -291,7 +309,10 @@ export function MarketPanel({ api, myConfigsApi, importApi, syncApi, t }: Market
       patch({ downloadingId: null, detail, approvals: defaultApprovals(detail.plan) })
     } catch (err) {
       if (stateRef.current.downloadingId !== item.id) return
+      // R-21：下载失败 → 全局 Toast。error 仍落一次：详情弹窗以它判断「下载已失败」
+      // （detail 恒为 null），否则弹窗内会一直显示加载 Spinner。
       patch({ downloadingId: null, error: err instanceof Error ? err.message : String(err) })
+      toast.error(redact(err instanceof Error ? err.message : String(err)))
     }
   }
 
@@ -301,9 +322,11 @@ export function MarketPanel({ api, myConfigsApi, importApi, syncApi, t }: Market
     if (detail === null) return
     const approvedPlan: ImportPlan = buildApprovedPlan(detail.plan, state.approvals)
     if (approvedPlan.items.length === 0) {
-      patch({ error: t('detail.noApproval') })
+      // K-07：未批准任何分区属表单内联校验（非动作失败）→ 保留就地提示（紧邻导入按钮）
+      setNoApprovalHint(true)
       return
     }
+    setNoApprovalHint(false)
     // plan 由 Host /market/download 的 dry-run 生成，确认时按已批准子集带回（安全不变式 (c)）
     patch({ importing: true, error: null })
     try {
@@ -313,8 +336,19 @@ export function MarketPanel({ api, myConfigsApi, importApi, syncApi, t }: Market
         { confirm: true, rollbackOnError: true },
       )
       patch({ importing: false, importResult: executed })
+      // R-06：导入结果改全局 Toast（成功 ok / 失败 error），成功分支不再页内占位
+      const okCount = executed.executed.filter((e) => e.status === 'ok').length
+      const failedCount = executed.executed.filter((e) => e.status === 'failed').length
+      const restartSuffix = executed.needsRestart ? ` · ${t('import.needsRestart')}` : ''
+      if (executed.ok) {
+        toast.ok(t('import.done', { count: String(okCount) }) + restartSuffix)
+      } else {
+        toast.error(t('import.failed', { count: String(failedCount) }) + restartSuffix)
+      }
     } catch (err) {
+      // R-21：导入执行失败 → 全局 Toast
       patch({ importing: false, error: err instanceof Error ? err.message : String(err) })
+      toast.error(redact(err instanceof Error ? err.message : String(err)))
     }
   }
 
@@ -409,32 +443,33 @@ export function MarketPanel({ api, myConfigsApi, importApi, syncApi, t }: Market
         </div>
       </Card>
 
-      {state.error !== null && <Banner kind="error">{state.error}</Banner>}
+      {/* R-21：动作失败（拉取最新 / 浏览 / 下载 / 导入）已全部改由全局 Toast 送达，
+          此处的页面级 error Banner 与弹窗内那份是**同一字段的双渲染点**，会与 Toast 重复告知，
+          故两处一并移除（state.error 仅保留作失败标记，见 runDownload / runImport）。 */}
 
       {/* 条目详情弹窗（下载 + 校验 + dry-run 预览；点「查看详情」→ 免责 → 弹窗；
-          下载完成前 detail 为 null → 显示 loading） */}
-      {downloadOpen && (
-        <div
-          className={css.dialogMask}
-          onMouseDown={(e) => { if (e.target === e.currentTarget && !state.importing) closeDownload() }}
-        >
-          <div className={`${css.dialogCard} ${css.dialogWide}`} role="dialog" aria-modal="true" aria-label={t('detail.title')}>
-            <div className={css.dialogHeaderRow}>
-              <span className={css.dialogHeader}>{t('detail.title')}：{state.detail !== null ? state.detail.name : (state.downloadingId ?? '')}</span>
-              <button
-                type="button"
-                className={css.dialogClose}
-                aria-label={t('common.close')}
-                disabled={state.importing}
-                onClick={closeDownload}
-              >
-                ×
-              </button>
-            </div>
-            <div className={css.dialogBodyScroll}>
-          {state.error !== null && <Banner kind="error">{redact(state.error)}</Banner>}
-          {state.detail === null && (
+          下载完成前 detail 为 null → 显示 loading；Radix Modal 统一 a11y） */}
+      <Modal
+        open={downloadOpen}
+        onClose={closeDownload}
+        title={t('detail.title')}
+        wide
+        busy={state.importing}
+      >
+        <Modal.Header
+          title={`${t('detail.title')}：${state.detail !== null ? state.detail.name : (state.downloadingId ?? '')}`}
+          onClose={closeDownload}
+          closeDisabled={state.importing}
+        />
+        <Modal.Body scroll>
+          {/* R-21：失败详情走全局 Toast（原弹窗内 error Banner 移除）。
+              下方 Spinner 以 state.error 为「失败标记」守卫：下载失败时 detail 恒为 null，
+              若不守卫会一直旋转，让用户误以为仍在加载（与 MyConfigsView R-17 同款处理）。 */}
+          {state.detail === null && state.error === null && (
             <div className={css.statRow}><Spinner label={t('common.loading')} /></div>
+          )}
+          {state.detail === null && state.error !== null && (
+            <div className={css.statRow}><span className={css.hint}>{t('detail.failed')}</span></div>
           )}
           {state.detail !== null && detailView !== null && (<>
           {/* 供应链警示：恒展示（硬约束），确认导入前必经 */}
@@ -529,19 +564,13 @@ export function MarketPanel({ api, myConfigsApi, importApi, syncApi, t }: Market
             <Banner kind="error">{t('detail.emptySections')}</Banner>
           )}
 
-          {state.importResult !== null && (
-            <Banner kind={state.importResult.ok ? 'ok' : 'error'}>
-              {state.importResult.ok
-                ? `导入完成：${state.importResult.executed.filter((e) => e.status === 'ok').length} 项写入`
-                : `导入失败（${state.importResult.executed.filter((e) => e.status === 'failed').length} 项失败）`}
-              {state.importResult.needsRestart && ' · 部分改动需重启 DSH 后生效'}
-            </Banner>
-          )}
+          {/* K-07：未批准任何分区（表单内联校验，保留就地提示；紧邻导入按钮，修正勾选后立即消失） */}
+          {detailView.canImport && noApprovalHint && <Banner kind="error">{t('detail.noApproval')}</Banner>}
+
+          {/* R-06：导入结果已由全局 Toast 送达（原 importResult Banner 移除） */}
           </>)}
-            </div>
-          </div>
-        </div>
-      )}
+        </Modal.Body>
+      </Modal>
 
       {/* 条目列表（浏览） */}
       {!downloadOpen && (

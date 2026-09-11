@@ -39,3 +39,6 @@ phase8-e2e/
 
 # UI rebuild QA sandbox (isolated DSH instance + screenshots)
 .qa/
+
+# Vision-router crop artifacts (local tooling output from browser visual QA)
+.dsh-vision-router/

@@ -51,7 +51,6 @@ export const zh = {
   // 当前状态
   'recovery.currentState.title': '当前状态',
   'recovery.currentState.safeMode': '已进入安全模式（会修改配置的操作已暂停）',
-  'recovery.currentState.safeModeCleared': '已恢复正常，可继续操作',
   'recovery.currentState.hasSnapshot': '存在可信恢复快照',
   'recovery.currentState.noSnapshot': '无可信恢复快照',
   // 快照信息
@@ -159,7 +158,6 @@ export const en: Record<keyof typeof zh, string> = {
   'recovery.verify.verdict.unknown': 'Unknown',
   'recovery.currentState.title': 'Current state',
   'recovery.currentState.safeMode': 'Safe mode active (config-modifying operations paused)',
-  'recovery.currentState.safeModeCleared': 'Restored to normal — you can continue',
   'recovery.currentState.hasSnapshot': 'Trusted recovery snapshot available',
   'recovery.currentState.noSnapshot': 'No trusted recovery snapshot',
   'recovery.snapshot.title': 'Recovery snapshot',

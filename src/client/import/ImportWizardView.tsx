@@ -39,6 +39,7 @@ import type { ConfigManagerApi, UploadResponse } from '../api.ts'
 import type { TranslateNS } from '../client-types.ts'
 import { runStore } from '../run-store.ts'
 import { Badge, Banner, Button, Card, Checkbox, Empty, SectionTitle, Spinner, Stepper } from '../common/ui.tsx'
+import { ChevronDownIcon } from '../common/Icon.tsx'
 import { ErrorBanner, ErrorList } from '../common/ErrorBanner.tsx'
 import { ProgressBar } from '../common/ProgressBar.tsx'
 import { ReportView } from '../common/ReportView.tsx'
@@ -163,7 +164,7 @@ function ImportLogPanelBase({ lines, t }: { lines: string[]; t: TranslateNS<'con
         {t('import.log.title')}
         {hasNewOutput && (
           <button type="button" className={css.logJumpButton} onClick={jumpToBottom}>
-            ↓ {t('import.log.newOutput')}
+            <ChevronDownIcon size={13} /> {t('import.log.newOutput')}
           </button>
         )}
       </div>
@@ -595,7 +596,7 @@ function ImportWizardBody({ api, t }: ImportWizardViewProps) {
     // 换选模型：由 store 的 selectedFileName/uploading 推导（import-file-reselection）
     const selectModel = fileSelectModel(imp.selectedFileName, uploading)
     return (
-      <div className={css.viewBody}>
+      <div className={`${css.viewBody} ${css.sparseFill}`}>
         <SectionTitle title={t('import.select.title')} subtitle={t('import.select.hint')} />
         <input
           ref={fileInput}
@@ -613,7 +614,7 @@ function ImportWizardBody({ api, t }: ImportWizardViewProps) {
             {t('import.select.file', { name: selectModel.selectedName })}
           </div>
         )}
-        <div className={css.actionRow}>
+        <div className={css.actionRow} style={{ marginBottom: 0 }}>
           {selectModel.selectedName !== null && (
             <Button variant="ghost" onClick={cancelPick}>
               {t('import.select.cancel')}

@@ -10,6 +10,7 @@ import { formatActionableError, toActionableError } from '../../ui/errors.ts'
 import { redact } from '../../security/redaction.ts'
 import { zhUiT, type UiT } from '../../ui/i18n.ts'
 import { Button, Spinner } from './ui.tsx'
+import { ArrowRightIcon } from './Icon.tsx'
 import css from '../config-manager.module.css'
 
 export interface ErrorBannerProps {
@@ -39,7 +40,7 @@ export function ErrorBanner({ error, onRetry, retrying, t = zhUiT }: ErrorBanner
       <pre className={css.errorReason}>{reason}</pre>
       {actionable.suggestedAction !== undefined && (
         <div className={css.errorAction}>
-          <span className={css.errorActionLabel}>→</span> {redact(actionable.suggestedAction)}
+          <span className={css.errorActionLabel}><ArrowRightIcon size={13} /></span> {redact(actionable.suggestedAction)}
         </div>
       )}
       {item !== undefined && <div className={css.errorItem}>{item}</div>}

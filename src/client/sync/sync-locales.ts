@@ -196,6 +196,26 @@ export const zh = {
   // 触发通道（同步历史「由哪个通道触发」）
   'history.channelGit': 'GitHub',
   'history.channelWebdav': 'WebDAV',
+  // —— Toast 操作回执（R-20：按动作分文案） ——
+  // 原先 10+ 个动作的失败共用同一个 state.error；机械替换成 Toast 后，同 kind+text
+  // 会被 store 的去重逻辑合并（互相顶掉），故此处为每个动作单独给出可区分文案。
+  'toast.autosyncLoadFailed': '读取自动同步状态失败',
+  'toast.configSaveFailed': '保存通道配置失败',
+  'toast.configSaved': '通道配置已保存',
+  'toast.configNothingToSave': '请先填写通道地址再保存',
+  'toast.selectionSaveFailed': '同步设置保存失败',
+  'toast.pushPreviewFailed': '推送预览失败',
+  'toast.pushFailed': '推送失败',
+  'toast.pushDone': '推送完成',
+  'toast.pullFailed': '拉取失败',
+  'toast.pullDone': '拉取完成',
+  'toast.syncStartFailed': '一键同步失败',
+  'toast.autosyncUpdateFailed': '自动同步设置更新失败',
+  'toast.autosyncUpdated': '自动同步设置已更新',
+  'toast.snapshotsLoadFailed': '读取远端快照失败',
+  'toast.snapshotsRefreshed': '远端快照列表已刷新',
+  // 页面级加载失败（M-16：就地错误态标题；loadError 此前无任何渲染点）
+  'load.failed': '加载同步状态失败',
   // 公共
   'common.close': '关闭',
   'common.retry': '重试',
@@ -382,6 +402,24 @@ export const en: Record<keyof typeof zh, string> = {
   // Trigger channel (which channel triggered this history entry)
   'history.channelGit': 'GitHub',
   'history.channelWebdav': 'WebDAV',
+  // Toast receipts (R-20: per-action wording; identical kind+text would be de-duplicated)
+  'toast.autosyncLoadFailed': 'Failed to load auto-sync status',
+  'toast.configSaveFailed': 'Failed to save channel config',
+  'toast.configSaved': 'Channel config saved',
+  'toast.configNothingToSave': 'Enter a channel URL before saving',
+  'toast.selectionSaveFailed': 'Failed to save sync settings',
+  'toast.pushPreviewFailed': 'Failed to build push preview',
+  'toast.pushFailed': 'Push failed',
+  'toast.pushDone': 'Push completed',
+  'toast.pullFailed': 'Pull failed',
+  'toast.pullDone': 'Pull completed',
+  'toast.syncStartFailed': 'One-click sync failed',
+  'toast.autosyncUpdateFailed': 'Failed to update auto-sync settings',
+  'toast.autosyncUpdated': 'Auto-sync settings updated',
+  'toast.snapshotsLoadFailed': 'Failed to load remote snapshots',
+  'toast.snapshotsRefreshed': 'Remote snapshot list refreshed',
+  // Page-level load failure (M-16: inline error state; loadError had no render point before)
+  'load.failed': 'Failed to load sync status',
   'common.close': 'Close',
   'common.retry': 'Retry',
   'common.loading': 'Loading…',
