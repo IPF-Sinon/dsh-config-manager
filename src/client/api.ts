@@ -45,6 +45,18 @@ export interface ServiceStatus {
   dshVersion: string;
   platform: string;
   arch: string;
+  /**
+   * issue #28 诊断位（best-effort，失败时缺省）：插件清单实际读的是哪个目录 / 哪个 profile /
+   * 看到几个插件。用于定位「装了插件但备份没识别到」——用户可据此自查 profile 与 DSH_HOME。
+   */
+  homeDir?: string;
+  profile?: string;
+  /** profile 的 package.json 是否可读（false → 清单必然为空） */
+  profileManifestReadable?: boolean;
+  installedPluginCount?: number;
+  installedPluginNames?: string[];
+  /** dsh.profile.bundles 声明（非空即替换默认插件栈） */
+  bundles?: string[];
 }
 
 /** export 端点响应（对齐 ExportFlow 的 ExportRunResult 前半部分；runId 为 m1 run 注册表标识） */

@@ -316,6 +316,7 @@ dsh-config-manager restore [--id <id>] [--dry-run]
                            [--profile <name>] [--settings <path>]
 dsh-config-manager reinstall [--version <v>] [--yes] [--list]
                              [--wipe-config] [--dry-run]       # one-click reinstall of DSH itself
+dsh-config-manager recover-stale-lock [--data-dir <dir>]       # clear a leftover lock (see below)
 ```
 
 **`reinstall` — rescue when DSH is broken.** It reinstalls the `@deepseek-ai/dsh` launcher across platforms (uses the right command per OS: PowerShell on Windows, bash on Unix). By default it reinstalls the launcher + clears global caches; interactively it asks which **dangerous** clean-up items to include (settings / plugins / session data & credentials) — those are **not** selected by default, and any destructive choice requires a second confirmation by typing `YES` before anything runs. Before wiping any `~/.dsh` data it makes an emergency backup at `.reinstall-backup` (the `snapshots/` folder is deliberately never touched).
@@ -348,6 +349,40 @@ dsh-config-manager restore --id <snapshot-id>                 # execute (current
 Every overwrite/delete is first copied to `<snapshotDir>/pre-restore/` so you can manually change your mind. Exit code is `1` if any action failed; the report honestly lists restored / removedPlugins / manualHints / failed / skipped.
 
 **A typical rescue flow** when DSH won't start: ① `dsh-config-manager reinstall` to bring the launcher back (plus any clean-up), ② `dsh web` to start DSH again, ③ re-add the plugin from the registry, and ④ pull a snapshot from the remote repo (or run `dsh-config-manager restore`) to bring your config back. The CLI works at every step regardless of DSH's health.
+
+**`recover-stale-lock` — when every operation suddenly fails.** Before touching your config, the plugin claims a small environment lock (it records who is operating plus a heartbeat) so that two operations can never write your config at the same time. If a `dsh web` process is **force-killed** (Task Manager, `kill -9`), the lock file survives with a dead owner: the next operation is refused, and it stays refused **no matter how often you retry or restart DSH** — because the plugin deliberately never removes a lock on its own (a wrong guess could evict a live operation).
+
+Symptoms and the fix:
+
+| Symptom | Meaning | Fix |
+|---|---|---|
+| 「另一个任务正在运行，请稍后重试。」 / "Another task is running, please retry." | A live operation holds the lock | Just wait — it clears itself |
+| 「检测到上次异常退出残留的配置锁…重试或重启 DSH 均无效」 / relayed in the log as `自动同步已跳过` | The owner process is **proven dead** (leftover lock) | Run the command below, or use GUI **Recovery → 事故恢复** |
+
+```bash
+# safe: it inspects first and refuses unless the owner is proven dead (a live lock is never touched)
+dsh-config-manager recover-stale-lock
+```
+
+**Plugins installed but the backup doesn't see them?** Check **Settings → DSH Config Manager → About**: it now shows which directory / profile the plugin list was read from, and how many plugins were detected. The list comes from `$DSH_HOME/profiles/<profile>/package.json` → `dependencies`, where `<profile>` is resolved as `config.profile` → `--profile` → `web`. If the shown path is not the profile you installed into (Desktop builds may use a different profile or a different `DSH_HOME`), that is the cause — align `--profile` / `DSH_HOME` with it.
+
+### 🌐 Behind a proxy? (GitHub login / sync)
+
+Node's built-in `fetch()` — used for the GitHub device-code login and the market/GitHub API calls — **does not read `HTTP_PROXY` / `HTTPS_PROXY` by default**. On networks where GitHub is only reachable through a local proxy, "Sign in with GitHub" therefore fails with `请求 GitHub 设备码失败：fetch failed` even though your browser and `git` work fine.
+
+Tell Node to honour the proxy environment variables (Node 24+; **set it before starting DSH**, since it is read at startup):
+
+```bash
+# macOS / Linux
+NODE_USE_ENV_PROXY=1 HTTPS_PROXY=http://127.0.0.1:7897 dsh web
+```
+
+```powershell
+# Windows PowerShell
+$env:NODE_USE_ENV_PROXY=1; $env:HTTPS_PROXY='http://127.0.0.1:7897'; dsh web
+```
+
+Notes: `NO_PROXY` is respected too — if your proxy tool bypasses `api.github.com` / `codeload.github.com`, those endpoints still fail when the direct route is flaky. WebDAV sync uses native `http`/`https` requests, which are covered by the same switch. A GitHub token configured manually does not help if the API call itself cannot get out: fix the proxy first, then sign in.
 
 ### 🤖 Agent tools (for AI assistants)
 

@@ -73,7 +73,7 @@ import { makeMsg, msgOf, zhMsg } from './core/messages.ts'
 import type { MsgFunc } from './core/messages.ts'
 import {
   cleanupAbortedInstall, hasDshBundlePatch, installErrorFor, installSpecFor, listInstalledPlugins,
-  resolveProfileDir, resolveProfileNameFromArgv, runDshPlugin, validateProfileName,
+  resolveProfileDir, resolveProfileNameFromArgv, readProfileManifest, runDshPlugin, validateProfileName,
 } from './core/plugin-cli.ts'
 import type {
   ConfigAdapter, CredentialsFacade, FileSystemFacade, HostContext, ImportDecisions,
@@ -1442,6 +1442,55 @@ function parseMeForm(raw: unknown): { name: string; id?: string; description?: s
   return form
 }
 
+/**
+ * GitHub 凭据「缺失或失效」判定（issue #29）：`no_token`（credentials 里从未配置 token）与
+ * `unauthorized`（401，token 过期/被撤销）对用户都是同一个「未登录」，必须走同一分支——
+ * 否则 `no_token` 会落到 500，UI 把「未登录」渲染成「登录状态读取失败」的误导性横幅。
+ * 其余分类（network_error / rate_limited / server_error / validation_failed / fork_timeout…）
+ * 是真实故障，仍按 500 暴露，绝不伪装成「未登录」。
+ */
+export function isGitHubAuthMissing(error: unknown): boolean {
+  return error instanceof GitHubApiError && (error.code === 'unauthorized' || error.code === 'no_token')
+}
+
+/** /status 的插件诊断位（issue #28）。仅回非敏​感元信息：目录、profile 名、计数。 */
+export interface PluginDiagnostics {
+  homeDir: string
+  profile: string
+  /** profile 目录的 package.json 是否可读（不可读 → 清单必然为空） */
+  profileManifestReadable: boolean
+  /** 插件清单来源 = package.json 的 dependencies 里非 in-box 的包 */
+  installedPluginCount: number
+  installedPluginNames: string[]
+  /** dsh.profile.bundles 声明（非空即「替换默认插件栈」） */
+  bundles: string[]
+}
+
+/**
+ * 读取插件诊断信息（issue #28）：把「插件到底读了哪个目录 / 哪个 profile / 看到什么」变成
+ * 用户可自查的数据——此前只存在于宿主内部，导致「装了插件却识别不到」无从定位。
+ * best-effort：失败不抛出（诊断位缺失不应拖垮 /status）。
+ */
+async function readPluginDiagnostics(host: HostContext): Promise<Partial<PluginDiagnostics>> {
+  try {
+    const profileDir = resolveProfileDir(host.homeDir, host.profile ?? 'web')
+    const manifest = readProfileManifest(profileDir)
+    const installed = await host.plugins.listInstalled()
+    const bundles = manifest?.dsh?.profile?.bundles
+    return {
+      homeDir: host.homeDir,
+      profile: host.profile ?? 'web',
+      profileManifestReadable: manifest !== null,
+      installedPluginCount: installed.length,
+      installedPluginNames: installed.map((p) => p.name),
+      bundles: Array.isArray(bundles) ? bundles : [],
+    }
+  } catch (err) {
+    host.log.warn(`plugin diagnostics unavailable: ${err instanceof Error ? err.message : String(err)}`)
+    return {}
+  }
+}
+
 /** Build the /api/dsh-config-manager route family. */
 function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSyncScheduler; makeSyncEngine: (cfg: SyncConfig) => SyncEngine } {
   const { host, adapters, exportsDir, tmpDir, snapshotsDir, runs, syncDir, marketDir, dataDir, credentials, githubClientId, githubClientSecret, backupScheduler, history } = deps
@@ -1593,7 +1642,7 @@ function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSync
         if (error instanceof EnvironmentLockUnavailableError) {
           // 内部诊断（op/reason）进日志；用户只看到友好文案（error.message 恒为中文友好版，
           // 不暴露环境锁/op/路径等技术细节）。
-          host.log.warn(`mutation lock blocked: op=${error.op}`)
+          host.log.warn(`mutation lock blocked: op=${error.op} reason=${error.reason}${error.detail !== undefined ? ` detail=${error.detail}` : ''}`)
           writeJson(res, 423, { error: error.message, code: 'mutation-locked' })
           return
         }
@@ -1925,12 +1974,18 @@ function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSync
       path: API.status,
       handler: async (req, res) => {
         if (!guard(req, res, 'GET')) return
+        // issue #28 诊断位：把「插件实际读的是哪个目录 / 哪个 profile / 看到几个插件」暴露出来。
+        // 插件清单来自 <homeDir>/profiles/<profile>/package.json 的 dependencies，三处任一
+        // 与实际情况不符（Desktop 用了别的 profile / 别的 DSH_HOME，或插件只写在 dsh.profile.bundles
+        // 而不在 dependencies），就会出现「明明装了插件、备份里却识别不到」——用户此前无从自查。
+        const pluginDiag = await readPluginDiagnostics(host)
         writeJson(res, 200, {
           ready: true,
           pluginVersion: PLUGIN_VERSION,
           dshVersion: host.dshVersion,
           platform: host.platform,
           arch: host.arch,
+          ...pluginDiag,
         })
       },
     },
@@ -2567,7 +2622,7 @@ function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSync
           })
         } catch (error) {
           if (error instanceof EnvironmentLockUnavailableError) {
-            host.log.warn(`mutation lock blocked: op=${error.op}`)
+            host.log.warn(`mutation lock blocked: op=${error.op} reason=${error.reason}${error.detail !== undefined ? ` detail=${error.detail}` : ''}`)
             writeJson(res, 423, { error: error.message, code: 'mutation-locked' })
           } else if (error instanceof TransactionRecoveryRequiredError) {
             writeJson(res, 423, { error: error.message, code: 'transaction-recovery-required' })
@@ -4243,8 +4298,9 @@ function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSync
             loggedIn = true
             login = user.login
           } catch (error) {
-            // 仅 401（token 无效/过期）→ 未登录；其余错误（网络/限流）向上抛
-            if (!(error instanceof GitHubApiError && error.code === 'unauthorized')) throw error
+            // 未配置 token 与 401（token 无效/过期）同属「未登录」→ loggedIn:false；
+            // 其余错误（网络/限流/服务端）向上抛，不能被伪装成「未登录」
+            if (!isGitHubAuthMissing(error)) throw error
           }
           const repoUrl = login !== undefined ? userConfigsRepoUrl(login) : undefined
           const repoExists = login !== undefined ? await meGitHubRest.repoExists(login, USER_CONFIGS_REPO) : false
@@ -4304,7 +4360,7 @@ function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSync
           const items = await meService.listItems()
           writeJson(res, 200, { items })
         } catch (error) {
-          const status = error instanceof GitHubApiError && error.code === 'unauthorized' ? 401 : 500
+          const status = isGitHubAuthMissing(error) ? 401 : 500
           writeJson(res, status, { error: redact(error instanceof Error ? error.message : String(error)) })
         }
       },
@@ -4358,7 +4414,7 @@ function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSync
           const status = await meService.listingStatus(itemId)
           writeJson(res, 200, status) // null → 200 null
         } catch (error) {
-          const status = error instanceof GitHubApiError && error.code === 'unauthorized' ? 401 : 500
+          const status = isGitHubAuthMissing(error) ? 401 : 500
           writeJson(res, status, { error: redact(error instanceof Error ? error.message : String(error)) })
         }
       },
@@ -4380,7 +4436,7 @@ function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSync
           const status = await meService.relist(itemId)
           writeJson(res, 200, status)
         } catch (error) {
-          const code = error instanceof GitHubApiError && error.code === 'unauthorized' ? 401 : 500
+          const code = isGitHubAuthMissing(error) ? 401 : 500
           const message = error instanceof MyRepoError && error.code === 'item_not_found'
             ? 404
             : code
@@ -4405,7 +4461,7 @@ function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSync
           const result = await meService.deleteItem(itemId)
           writeJson(res, 200, result)
         } catch (error) {
-          const code = error instanceof GitHubApiError && error.code === 'unauthorized' ? 401 : 500
+          const code = isGitHubAuthMissing(error) ? 401 : 500
           const message = error instanceof MyRepoError && error.code === 'item_not_found'
             ? 404
             : code
@@ -4519,7 +4575,7 @@ function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSync
           })
         } catch (error) {
           if (error instanceof EnvironmentLockUnavailableError) {
-            host.log.warn(`mutation lock blocked: op=${error.op}`)
+            host.log.warn(`mutation lock blocked: op=${error.op} reason=${error.reason}${error.detail !== undefined ? ` detail=${error.detail}` : ''}`)
             writeJson(res, 423, { error: error.message, code: 'mutation-locked' })
             return
           }

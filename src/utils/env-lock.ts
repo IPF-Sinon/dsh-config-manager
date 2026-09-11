@@ -197,7 +197,7 @@ export interface MutationLockPort {
 export async function withMutationLock(
   port: MutationLockPort | undefined,
   opts: { op: string; target?: string; parentContext?: MutationLockContext; isBlocked?: () => boolean },
-): Promise<{ context: MutationLockContext | null; release(): Promise<void>; reason?: LockBlockReason }> {
+): Promise<{ context: MutationLockContext | null; release(): Promise<void>; reason?: LockBlockReason; detail?: string }> {
   // Phase 3 SAFE MODE：注入谓词被挡 → 拒绝（generic blocked?，不识 policy/why）
   if (opts.isBlocked?.() === true) {
     return { context: null, release: async () => {}, reason: 'blocked' }
@@ -214,8 +214,14 @@ export async function withMutationLock(
   if (res.state !== 'ACQUIRED' || res.token === null) {
     // 锁不可得：不放行。区分「被活跃任务占用」（LOCKED）与「锁不可用」（STALE/UNKNOWN/IO/PERM）
     // —— 只在 LOCKED 时向用户说「另一个任务在运行」，其余诚实说「暂无法执行」（不谎称在运行）。
-    const reason: LockBlockReason = res.state === 'LOCKED' ? 'locked' : 'unavailable'
-    return { context: null, release: async () => {}, reason }
+    // stale 单独成类（issue #27）：残留锁「重试/重启都不会好」，必须显式回收——
+    // 若与别的不可用原因共用「请稍后重试」文案，用户会一直等到放弃（实测反馈即如此）。
+    const reason: LockBlockReason = res.state === 'LOCKED'
+      ? 'locked'
+      : res.state === 'STALE_LOCK_DETECTED'
+        ? 'stale'
+        : 'unavailable'
+    return { context: null, release: async () => {}, reason, detail: res.detail }
   }
   const context: MutationLockContext = { token: res.token }
   let released = false
@@ -241,9 +247,9 @@ export async function runWithMutationLock<T>(
   fn: (ctx: MutationLockContext | null) => Promise<T>,
 ): Promise<T> {
   if (port === undefined) return fn(null)
-  const { context, release, reason } = await withMutationLock(port, opts)
+  const { context, release, reason, detail } = await withMutationLock(port, opts)
   if (context === null) {
-    throw new EnvironmentLockUnavailableError(opts.op, reason ?? 'locked')
+    throw new EnvironmentLockUnavailableError(opts.op, reason ?? 'locked', detail)
   }
   try {
     return await fn(context)
@@ -948,14 +954,24 @@ export type LockBlockReason =
   | 'locked'
   /** Phase 3 SAFE MODE 注入谓词阻断（isBlocked → 「配置修改已被保护，请先处理恢复事项」） */
   | 'blocked'
-  /** 锁不可用/IO/权限/UNKNOWN/STALE（→ 「操作暂时无法执行，请稍后重试」） */
+  /**
+   * 检测到 stale 残留锁（上次进程异常退出，持有者已确证死亡）——**重试不会自愈**，
+   * 必须显式回收（GUI「事故恢复」/ CLI `recover-stale-lock`）。见 issue #27。
+   */
+  | 'stale'
+  /** 锁不可用/IO/权限/UNKNOWN（→ 「操作暂时无法执行，请稍后重试」） */
   | 'unavailable'
 
-/** 按分类生成用户可读的友好文案（内部诊断不进入此文案；op/reason 作为字段供日志使用）。 */
-const LOCK_BLOCK_MESSAGE: Record<LockBlockReason, string> = {
+/** 按分类生成用户可读的友好文案（内部诊断不进入此文案；op/reason 作为字段供日志使用）。
+ *  导出：后台调度器（自动同步/定时备份）被挡时用同一份文案写日志，避免两处文案漂移。 */
+export const LOCK_BLOCK_MESSAGE: Record<LockBlockReason, string> = {
   locked: '另一个任务正在运行，请稍后重试。',
   blocked: '配置修改已被保护，请先处理恢复事项后再继续。',
   unavailable: '操作暂时无法执行，请稍后重试；若持续失败请查看日志。',
+  // 必须说清「重试/重启都不会好」并给出可操作路径：否则用户只会一遍遍重试（issue #27 实测如此）。
+  stale: '检测到上次异常退出残留的配置锁（其持有进程已不存在），操作已被阻止。'
+    + '该锁不会自动清除，重试或重启 DSH 均无效：请在「事故恢复」中执行一次恢复，'
+    + '或运行 dsh-config-manager recover-stale-lock 回收后再重试。',
 }
 
 /** destructive 必须成功获取 Environment Lock；否则抛此错（被另一进程/操作持有，或锁不可用）。
@@ -963,11 +979,17 @@ const LOCK_BLOCK_MESSAGE: Record<LockBlockReason, string> = {
 export class EnvironmentLockUnavailableError extends Error {
   readonly reason: LockBlockReason
   readonly op: string
-  constructor(op: string, reason: LockBlockReason = 'locked') {
+  /**
+   * 内部诊断（非敏感）：占用方 op/hostname 或 stale 判定依据。**只进日志**，
+   * 绝不进入 .message（用户文案里不含 op/路径/主机名）。
+   */
+  readonly detail: string | undefined
+  constructor(op: string, reason: LockBlockReason = 'locked', detail?: string) {
     super(LOCK_BLOCK_MESSAGE[reason])
     this.name = 'EnvironmentLockUnavailableError'
     this.reason = reason
     this.op = op
+    this.detail = detail
   }
 }
 

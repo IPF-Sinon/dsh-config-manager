@@ -90,6 +90,21 @@ export function AboutPanel({ api, t }: AboutPanelProps) {
             <Badge kind="info">{state.rows.platform}</Badge>
           </div>
         )}
+
+        {/* issue #28 诊断位：插件清单实际读的目录 / profile / 识别到的插件数。
+            用于自查「装了插件却没被备份识别到」——此前用户完全无从查看。 */}
+        {state.rows?.diagnostics != null && (
+          <div className={css.statRow} style={{ flexDirection: 'column', alignItems: 'flex-start', gap: '4px' }}>
+            <span className={css.groupLabel}>{t('about.diag.label')}</span>
+            <span>{t('about.diag.profileDir', { path: state.rows.diagnostics.profileDir })}</span>
+            <span>{t('about.diag.profile', { profile: state.rows.diagnostics.profile })}</span>
+            <span>{t('about.diag.pluginCount', { count: String(state.rows.diagnostics.pluginCount) })}</span>
+            {state.rows.diagnostics.manifestUnreadable && (
+              <Banner kind="warn">{t('about.diag.manifestUnreadable')}</Banner>
+            )}
+            <span className={css.groupLabel}>{t('about.diag.hint')}</span>
+          </div>
+        )}
       </Card>
 
       {/* 相关链接卡：Star 主按钮 + 仓库/文档/Issues 链接行 + 作者行（全部外链） */}

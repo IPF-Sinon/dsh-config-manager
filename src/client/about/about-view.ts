@@ -49,6 +49,13 @@ export interface AboutStatusInput {
   dshVersion: string;
   platform: string;
   arch: string;
+  /** issue #28 诊断位（best-effort，可缺省） */
+  homeDir?: string;
+  profile?: string;
+  profileManifestReadable?: boolean;
+  installedPluginCount?: number;
+  installedPluginNames?: string[];
+  bundles?: string[];
 }
 
 /** 状态展示行（版本 / DSH / 平台），供 Badge 装配 */
@@ -59,6 +66,23 @@ export interface AboutStatusRows {
   dsh: string;
   /** 平台 · 架构（合并 platform + arch，对齐 locale about.platform 模板） */
   platform: string;
+  /** issue #28 诊断行（无诊断数据时为 null，面板据此隐藏该行） */
+  diagnostics: AboutDiagnosticsRow | null;
+}
+
+/**
+ * issue #28 诊断行：把「插件读的是哪个目录 / 哪个 profile / 看到几个插件」显式展示。
+ * 用户据此即可自查「装了插件却没被识别」是不是 profile 或 DSH_HOME 不匹配。
+ */
+export interface AboutDiagnosticsRow {
+  /** 插件清单来源目录（=<homeDir>/profiles/<profile>） */
+  profileDir: string;
+  /** 解析到的 profile 名 */
+  profile: string;
+  /** 读到的插件数量 */
+  pluginCount: number;
+  /** profile 的 package.json 不可读 → 清单必然为空（关键诊断信号） */
+  manifestUnreadable: boolean;
 }
 
 /**
@@ -93,6 +117,23 @@ export function aboutStatusRows(status: AboutStatusInput): AboutStatusRows {
     version: status.pluginVersion,
     dsh: status.dshVersion,
     platform: `${status.platform} · ${status.arch}`,
+    diagnostics: diagnosticsRow(status),
+  };
+}
+
+/**
+ * 诊断行（issue #28）：仅当宿主回了 homeDir 与 profile 时展示（老版本宿主 → null，面板自动隐藏）。
+ * 路径分隔符归一化为 '/'，避免 Windows 反斜杠在 UI 上显示混乱。
+ */
+function diagnosticsRow(status: AboutStatusInput): AboutDiagnosticsRow | null {
+  const homeDir = status.homeDir;
+  const profile = status.profile;
+  if (typeof homeDir !== 'string' || homeDir === '' || typeof profile !== 'string' || profile === '') return null;
+  return {
+    profileDir: `${homeDir.replace(/\\/g, '/')}/profiles/${profile}`,
+    profile,
+    pluginCount: status.installedPluginCount ?? 0,
+    manifestUnreadable: status.profileManifestReadable === false,
   };
 }
 

@@ -34,7 +34,7 @@ import type { SectionId } from '../schema/types.ts';
 import type { RunRegistry } from '../core/run-registry.ts';
 import type { SyncEngine } from './sync-engine.ts';
 import type { MutationLockPort, MutationLockContext } from '../utils/env-lock.ts';
-import { withMutationLock } from '../utils/env-lock.ts';
+import { withMutationLock, LOCK_BLOCK_MESSAGE } from '../utils/env-lock.ts';
 import { readAutosyncConfig, writeAutosyncConfig } from './autosync-config.ts';
 import type { AutosyncConfig, AutosyncInterval, AutosyncRunStatus } from './autosync-config.ts';
 import { readSyncConfigFor, isGitConfig, isWebDavConfig } from './sync-config.ts';
@@ -286,6 +286,11 @@ export class AutoSyncScheduler {
         const lk = await withMutationLock(this.mutationLock, { op: 'autosync', target: channel, isBlocked: this.isBlocked });
         if (lk.context === null) {
           this.running = false;
+          // issue #27：被挡时按分类告知用户。stale 残留锁「重试不会自愈」，必须显式回收——
+          // 这里把与 423 响应同文案的指引写进日志，否则自动同步只会静默跳过，用户无从下手。
+          if (lk.reason === 'stale') {
+            this.host.log.warn(`自动同步已跳过（${channel}）：${LOCK_BLOCK_MESSAGE.stale}`);
+          }
           return {
             status: 'skipped', direction: 'none', skipReason: 'mutation-locked', historyId,
             consecutiveFailures: cfg.consecutiveFailures,
