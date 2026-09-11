@@ -23,6 +23,7 @@
  *      error ∈ authorization_pending | slow_down | expired_token | access_denied | ...
  */
 import { randomUUID } from 'node:crypto';
+import { defaultFetcher } from '../utils/proxy.ts';
 
 /** GitHub device flow 第一步：请求设备码 */
 export const GITHUB_DEVICE_CODE_URL = 'https://github.com/login/device/code';
@@ -127,7 +128,7 @@ export class GitHubAuthClient {
   private readonly now: () => number;
 
   constructor(options: GitHubAuthOptions = {}) {
-    this.fetcher = options.fetcher ?? fetch;
+    this.fetcher = options.fetcher ?? defaultFetcher();
     this.now = options.now ?? (() => Date.now());
   }
 

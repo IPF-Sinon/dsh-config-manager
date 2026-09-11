@@ -25,8 +25,7 @@
  *   按最终响应返回（上层如实报 HTTP 状态失败）。
  * - 可注入 request 便于测试；注入实现负责自己的重定向语义（默认实现才自动跟随）。
  */
-import http from 'node:http';
-import https from 'node:https';
+import { requestOnce, type RawResponse } from '../../utils/proxy.ts';
 import { zhMsg } from '../../core/messages.ts';
 import type { MsgFunc } from '../../core/messages.ts';
 import { deserializeSnapshot, serializeSnapshot } from '../snapshot-json.ts';
@@ -164,78 +163,55 @@ const defaultRequest: WebDavRequestFn = async (method, url, options = {}) => {
   }
 };
 
-/** 单次裸请求（不跟随重定向）：node:http/https + 超时；响应始终带 headers */
-function rawRequest(
+/** 单次裸请求（不跟随重定向）。
+ *
+ * 实现已统一到 `utils/proxy.requestOnce`（issue #30 ②级方案）：同一份实现同时服务 WebDAV 与
+ * GitHub 出站，并在此处获得**插件私有**的代理能力（HTTP 代理 absolute-form / HTTPS 代理 CONNECT
+ * 隧道 + TLS），且不改动任何全局状态。未配置代理时行为与原先的 node:http 直连完全一致。
+ */
+async function rawRequest(
   method: string,
   url: string,
   options: WebDavRequestOptions,
 ): Promise<WebDavResponse> {
   const timeoutMs = options.timeoutMs ?? 0;
-  return new Promise((resolve, reject) => {
-    let parsed: URL;
-    try {
-      parsed = new URL(url);
-    } catch (err) {
-      reject(err);
-      return;
-    }
+  const headers: Record<string, string> = {
+    'User-Agent': 'DSH-Config-Manager/0.1.55 (WebDAV Client)',
+    ...(options.headers ?? {}),
+  };
+  if (options.body === undefined) {
+    // 303 降级后已丢弃 body → 清除残留的 Content-Length，避免 GET 带错误长度头
+    delete headers['Content-Length'];
+    delete headers['content-length'];
+  }
 
-    const isHttps = parsed.protocol === 'https:';
-    const lib = isHttps ? https : http;
-
-    const headers: Record<string, string> = {
-      'User-Agent': 'DSH-Config-Manager/0.1.55 (WebDAV Client)',
-      ...(options.headers ?? {}),
-    };
-
-    let payload: Buffer | undefined;
-    if (options.body !== undefined) {
-      payload = Buffer.from(options.body, 'utf8');
-      headers['Content-Length'] = String(payload.length);
-    } else {
-      // 303 降级后已丢弃 body → 清除残留的 Content-Length，避免 GET 带错误长度头
-      delete headers['Content-Length'];
-    }
-
-    const req = lib.request(
+  let res: RawResponse;
+  try {
+    res = await requestOnce({
+      method,
       url,
-      {
-        method,
-        headers,
-        timeout: timeoutMs > 0 ? timeoutMs : undefined,
-      },
-      (res) => {
-        const chunks: Buffer[] = [];
-        res.on('data', (chunk) => chunks.push(Buffer.from(chunk)));
-        res.on('end', () => {
-          const bodyBuffer = Buffer.concat(chunks);
-          const status = res.statusCode ?? 0;
-          resolve({
-            status,
-            ok: status >= 200 && status < 300,
-            headers: res.headers as Record<string, string>,
-            text: async () => bodyBuffer.toString('utf8'),
-          });
-        });
-      },
-    );
-
-    req.on('timeout', () => {
-      req.destroy();
-      const err = new Error(`Request timed out after ${timeoutMs}ms`);
-      err.name = 'TimeoutError';
-      reject(err);
+      headers,
+      ...(options.body !== undefined ? { body: options.body } : {}),
+      ...(timeoutMs > 0 ? { timeoutMs } : {}),
     });
-
-    req.on('error', (err) => {
-      reject(err);
-    });
-
-    if (payload !== undefined) {
-      req.write(payload);
+  } catch (err) {
+    // 超时错误名保持 'TimeoutError'（上层 isTimeout 依赖它做文案归一）
+    if (err instanceof Error && /timed out/i.test(err.message) && err.name !== 'TimeoutError') {
+      const timeoutError = new Error(err.message);
+      timeoutError.name = 'TimeoutError';
+      throw timeoutError;
     }
-    req.end();
-  });
+    throw err;
+  }
+
+  const responseHeaders: Record<string, string> = {};
+  res.headers.forEach((value, key) => { responseHeaders[key] = value });
+  return {
+    status: res.status,
+    ok: res.status >= 200 && res.status < 300,
+    headers: responseHeaders,
+    text: async () => res.body.toString('utf8'),
+  };
 }
 
 /** 同源判断（协议 + host，host 含端口；子域名不同视为跨源） */

@@ -368,21 +368,32 @@ dsh-config-manager recover-stale-lock
 
 ### 🌐 Behind a proxy? (GitHub login / sync)
 
-Node's built-in `fetch()` — used for the GitHub device-code login and the market/GitHub API calls — **does not read `HTTP_PROXY` / `HTTPS_PROXY` by default**. On networks where GitHub is only reachable through a local proxy, "Sign in with GitHub" therefore fails with `请求 GitHub 设备码失败：fetch failed` even though your browser and `git` work fine.
+Node's built-in `fetch()` does **not** read `HTTP_PROXY` / `HTTPS_PROXY` by default, so on networks where GitHub is only reachable through a local proxy, "Sign in with GitHub" would previously fail with `请求 GitHub 设备码失败：fetch failed` even though your browser and `git` work fine.
 
-Tell Node to honour the proxy environment variables (Node 24+; **set it before starting DSH**, since it is read at startup):
+**The plugin now routes its own outbound requests through your proxy automatically** — just make sure the proxy environment variables are visible to the DSH process:
 
 ```bash
-# macOS / Linux
-NODE_USE_ENV_PROXY=1 HTTPS_PROXY=http://127.0.0.1:7897 dsh web
+# macOS / Linux — before starting dsh
+export HTTPS_PROXY=http://127.0.0.1:7897
+export NO_PROXY=localhost,127.0.0.1
+dsh web
 ```
 
 ```powershell
 # Windows PowerShell
-$env:NODE_USE_ENV_PROXY=1; $env:HTTPS_PROXY='http://127.0.0.1:7897'; dsh web
+$env:HTTPS_PROXY='http://127.0.0.1:7897'; dsh web
 ```
 
-Notes: `NO_PROXY` is respected too — if your proxy tool bypasses `api.github.com` / `codeload.github.com`, those endpoints still fail when the direct route is flaky. WebDAV sync uses native `http`/`https` requests, which are covered by the same switch. A GitHub token configured manually does not help if the API call itself cannot get out: fix the proxy first, then sign in.
+How it behaves:
+
+- **Covers all plugin egress**: GitHub API + device-flow login (`fetch`) and WebDAV sync (native `http`/`https`), including `CONNECT` tunnelling for `https` targets;
+- **Zero impact when you have no proxy configured** — no proxy variables means no behaviour change at all;
+- **`NO_PROXY` is respected** (`*`, exact host, `example.com` suffix, optional `:port`);
+- **`DSH_CONFIG_MANAGER_PROXY=off`** forces direct connections even when proxy variables exist;
+- Proxy credentials in the URL (if any) are used only for `Proxy-Authorization` and **never logged**; the startup log prints a redacted proxy summary so you can confirm whether routing is active;
+- This is **plugin-private**: it never changes global/process-wide network settings (unlike `NODE_USE_ENV_PROXY`, which affects the whole host process including model API calls).
+
+Alternative (host-wide): set `NODE_USE_ENV_PROXY=1` **before starting DSH** (Node 24+); note this also routes the host's own outbound traffic, not just this plugin's.
 
 ### 🤖 Agent tools (for AI assistants)
 

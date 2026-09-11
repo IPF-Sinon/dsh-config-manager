@@ -86,6 +86,7 @@ import { createEncryptionProvider, decryptCredentials, decryptArchive, SecurityE
 import { createHardenedZipParser } from './security/zip-security.ts'
 import { atomicCopyFile, atomicWriteFile } from './utils/atomic-write.ts'
 import { EnvironmentLockManager, runWithMutationLock, EnvironmentLockUnavailableError, type MutationLockContext } from './utils/env-lock.ts'
+import { activeProxySummary } from './utils/proxy.ts'
 import { Phase3Recovery, TransactionRecoveryRequiredError, mapLockStateForStartup } from './core/phase3-host.ts'
 import type { JournalRunContext } from './core/phase3-host.ts'
 import { classifyStartup } from './core/startup-barrier.ts'
@@ -4617,6 +4618,14 @@ export function apply(ctx: Context, config?: Config): void {
   mkdirSync(historyDir, { recursive: true })
 
   const host = new ConfigManagerHostContext(ctx, homeDir, resolveProfileName(config))
+  // issue #30：出站代理（插件私有，不改全局）。仅在检测到 HTTP(S)_PROXY 时生效；未配置则完全直连。
+  // 打一条脱敏日志，便于用户确认「插件当前到底走没走代理」（凭据不进日志）。
+  const proxySummary = activeProxySummary()
+  if (proxySummary !== null) {
+    host.log.info(
+      `出站请求经代理 / outbound requests via proxy: http=${proxySummary.http ?? '(none)'} https=${proxySummary.https ?? '(none)'} noProxyEntries=${proxySummary.noProxyEntries}`,
+    )
+  }
   // Phase 2 跨进程环境锁：全局唯一 GLOBAL EXCLUSIVE MUTATION LOCK（<dataDir>/locks/environment.lock）。
   // 所有 destructive mutation 入口经 runWithMutationLock(host.mutationLock, …) 获取；跨进程/跨 kind 互斥。
   // 随插件生命周期停止：停止 heartbeat 并清除本进程持有（release 由各入口 finally 保证；这里无需额外清理）。

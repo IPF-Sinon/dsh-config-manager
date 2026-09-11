@@ -27,6 +27,7 @@
  * 依赖注入：tokenProvider 必填；fetcher / now / 轮询参数可注入，测试全程 mock 不碰真实网络。
  */
 import { redact } from '../security/redaction.ts';
+import { defaultFetcher } from '../utils/proxy.ts';
 
 /** GitHub REST API v3 基址 */
 export const GITHUB_API_BASE = 'https://api.github.com';
@@ -259,7 +260,7 @@ export class GitHubAuthRest {
 
   constructor(options: GitHubAuthRestOptions) {
     this.tokenProvider = options.tokenProvider;
-    this.fetcher = options.fetcher ?? fetch;
+    this.fetcher = options.fetcher ?? defaultFetcher();
     this.now = options.now ?? (() => Date.now());
     this.pollIntervalMs = options.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS;
     this.pollTimeoutMs = options.pollTimeoutMs ?? DEFAULT_POLL_TIMEOUT_MS;
