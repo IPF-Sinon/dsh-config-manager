@@ -53,6 +53,65 @@ export function filterToQuery(f: HistoryFilter): Record<string, string | undefin
   return q;
 }
 
+/**
+ * 客户端侧 kind/result 过滤（与后端 query 的关系）：
+ * `filterToQuery` 描述的是**后端** `/history?kind=…&result=…` 的查询契约；HistoryPanel 目前
+ * 一次性拉取全量条目（`historyApi.list()` 不带参数），因此分类筛选改由本纯函数在前端收敛。
+ * 两者语义一致（kind / result 各自为空即不约束，同时给出时取交集），后端 query 保持可用，
+ * 后续若改为服务端过滤可无缝切回 `filterToQuery`。
+ *
+ * 规则：`undefined` 或 `''` 视为「不过滤」；保持输入顺序（不做排序）。
+ */
+export function filterByKindResult(
+  entries: StoredMigrationHistoryEntry[],
+  kind?: MigrationKind,
+  result?: MigrationResult,
+): StoredMigrationHistoryEntry[] {
+  // 归一为 string 比较：运行时 select 的 value 可能是 ''（空 = 全部），类型上不会出现但需兜底
+  const wantKind: string = kind ?? '';
+  const wantResult: string = result ?? '';
+  if (wantKind === '' && wantResult === '') return entries;
+  return entries.filter((e) => {
+    if (wantKind !== '' && e.kind !== wantKind) return false;
+    if (wantResult !== '' && e.result !== wantResult) return false;
+    return true;
+  });
+}
+
+/**
+ * 归纳当前数据里**真实出现过**的 kind（按 HISTORY_KIND_OPTIONS 顺序去重）。
+ *
+ * 用于过滤下拉：全量枚举 14 类中有大量分类（profile-delete/rename/import、snapshot-prune…）
+ * 在本机历史里永远不会出现，把它们列进下拉只会让用户选出「永远为空」的结果。
+ * 空数据返回空数组。
+ *
+ * @param keepSelected 当前选中值：即使数据里已不存在也保留在选项里（位置仍按
+ *   HISTORY_KIND_OPTIONS 顺序）——否则用户会看到「下拉里没有自己刚选中的项」的怪状态。
+ */
+export function collectHistoryKinds(
+  entries: StoredMigrationHistoryEntry[],
+  keepSelected?: MigrationKind,
+): MigrationKind[] {
+  const present = new Set<MigrationKind>();
+  for (const e of entries) present.add(e.kind);
+  if (keepSelected !== undefined) present.add(keepSelected);
+  return HISTORY_KIND_OPTIONS.filter((k) => present.has(k));
+}
+
+/**
+ * 归纳当前数据里**真实出现过**的 result（按 HISTORY_RESULT_OPTIONS 顺序去重）。
+ * 与 collectHistoryKinds 同语义（「结果」下拉同样不列不存在的项，且保留当前选中值）。
+ */
+export function collectHistoryResults(
+  entries: StoredMigrationHistoryEntry[],
+  keepSelected?: MigrationResult,
+): MigrationResult[] {
+  const present = new Set<MigrationResult>();
+  for (const e of entries) present.add(e.result);
+  if (keepSelected !== undefined) present.add(keepSelected);
+  return HISTORY_RESULT_OPTIONS.filter((r) => present.has(r));
+}
+
 /** 按 kind + result 分组的渲染模型（卡片列表直接消费）。 */
 export interface HistoryGroup {
   kind: MigrationKind;

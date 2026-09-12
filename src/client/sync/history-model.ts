@@ -40,6 +40,17 @@ export function formatDateTime(iso: string): string {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 
+/**
+ * ISO 时间 → 完整本地时间字符串（含秒，用于 td 的 title 悬停提示）。
+ * 非法/空输入回退 ''（不渲染 title，避免出现无意义的提示）。
+ */
+export function formatDateTimeFull(iso: string): string {
+  if (!iso) return '';
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return '';
+  return d.toLocaleString();
+}
+
 /* ---------------------------------------------------------------- 自动同步记录投影 */
 
 /** 自动同步执行记录的方向可读标签。 */
@@ -81,6 +92,10 @@ export interface AutosyncHistoryRow {
   status: string;
   /** 摘要行文本（如「下载 · 已跳过 · 冲突项被跳过」）。 */
   summary: string;
+  /** 状态徽章语义色（列表类型列，见 autosyncBadgeKind）。 */
+  badgeKind: 'ok' | 'warn' | 'error';
+  /** 跳过原因可读文本（列表第二行小字）；无跳过原因则 undefined。 */
+  skipReasonText?: string;
   /** 被跳过的冲突分区 id（展开明细用）；无则 undefined。 */
   conflictedSections?: string[];
   /** 实际应用的分区 id。 */
@@ -89,6 +104,67 @@ export interface AutosyncHistoryRow {
   notifiedAt?: string;
   /** 是否有关联的跳过分区明细可展开。 */
   hasDetail: boolean;
+}
+
+/* ---------------------------------------------------------------- 展示辅助（UI 重构新增） */
+/**
+ * 中段省略：保留头尾，中段以 … 替代（尾部才是区分信息，不可被截掉）。
+ * 与 SnapshotsPanel 的同名私有函数语义一致；此处导出以便本模块复用 + 单测覆盖
+ * （不在组件间跨文件 import 私有函数）。
+ */
+export function midEllipsis(s: string, max = 26): string {
+  if (s.length <= max) return s;
+  const keep = max - 1;
+  const head = Math.ceil(keep / 2);
+  const tail = keep - head;
+  return `${s.slice(0, head)}…${s.slice(-tail)}`;
+}
+
+/**
+ * 自动同步状态 → Badge 语义色。
+ * success → ok（成功）/ skipped → warn（被动放弃）/ failed → error / partial → warn（未完整成功）。
+ */
+export function autosyncBadgeKind(status: AutosyncHistoryEntry['status']): 'ok' | 'warn' | 'error' {
+  switch (status) {
+    case 'success': return 'ok';
+    case 'failed': return 'error';
+    // skipped / partial：都不是失败，但都需要用户注意
+    default: return 'warn';
+  }
+}
+
+/** 同步历史统计摘要（列表头部徽章行）。 */
+export interface SyncHistorySummary {
+  total: number;
+  snapshots: number;
+  autosync: number;
+  failed: number;
+  skipped: number;
+}
+
+/**
+ * 统计同步历史条目。基于 projectSyncHistoryEntries 的投影结果（本函数不排序）。
+ * - snapshots：apply / push / pull / rollback（快照类）
+ * - autosync：kind='autosync' 的条目数
+ * - failed：自动同步 status='failed'（含 error）
+ * - skipped：自动同步 status='skipped' 或 'partial'（部分成功也计入「需注意」）
+ */
+export function summarizeSyncHistory(rows: readonly SyncHistoryEntry[]): SyncHistorySummary {
+  let snapshots = 0;
+  let autosync = 0;
+  let failed = 0;
+  let skipped = 0;
+  for (const r of rows) {
+    if (r.kind === 'autosync') {
+      autosync += 1;
+      const status = r.autosync?.status;
+      if (status === 'failed') failed += 1;
+      else if (status === 'skipped' || status === 'partial') skipped += 1;
+    } else {
+      snapshots += 1;
+    }
+  }
+  return { total: rows.length, snapshots, autosync, failed, skipped };
 }
 
 /** 自动同步记录 → 展示行投影。 */
@@ -101,6 +177,9 @@ export function projectAutosyncEntry(entry: AutosyncHistoryEntry): AutosyncHisto
     direction: directionLabel(entry.direction),
     status: autosyncStatusLabel(entry.status),
     summary: parts.join(' · '),
+    badgeKind: autosyncBadgeKind(entry.status),
+    // E：跳过原因从摘要串里拆出来，单独走第二行小字（摘要串保留以兼容既有测试/调用方）
+    skipReasonText: entry.skipReason !== undefined ? describeSkipReason(entry.skipReason) : undefined,
     conflictedSections: entry.conflictedSections,
     appliedSections: entry.appliedSections,
     error: entry.error,

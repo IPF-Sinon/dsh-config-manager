@@ -139,17 +139,30 @@ Shell（`ConfigManagerSection`）：导航条 + 页面内容 + 状态栏 + 活�
 - **数据表**：`.tableWrap > .tableScroll > .dataTable`；变体 `.tableFixed`（固定布局 +
   th 显式宽度 + 内容 ellipsis）、`.tableCompact`（padding 8px）。行 hover 高亮、
   `data-selected` 选中淡底、数字列 `.num` 右对齐等宽、次级列 `.dim`。
+  - **操作列**（`.cellActions`）：`overflow: visible; text-overflow: clip` 覆盖 `.tableFixed`
+    给所有单元格加的省略号 —— 该列是按钮组，列宽略紧时浏览器会在按钮后补一个「…」
+    （备份页两张表都出现过）。宁可略微溢出也不截断；并给 `.tableFixed` 单元格左右各留 12px。
 - **状态条**（Overview）：`.statStrip`（健康点 + 可点指标段，名词在前值加粗）。
 - **事实网格**：`.factGrid/.factCell/.factLabel/.factValue`（四列 label/value）。
-- **键值行** `.kvRow`、**分区构成** `.sectionGrid/.sectionRow`。
+- **键值行** `.kvRow`、**分区构成** `.sectionGrid/.sectionRow`（共享组件
+  `common/SectionComposition.tsx`，总览卡与导出预览弹窗共用；列用
+  `repeat(auto-fit, minmax(210px, 1fr))` 以便窄容器自动退化为单列）。
 - **Stepper**：紧凑圆点 17px + 连接线，只读指示器。
 - **进度条**：`.progressTrack` 5px + 确定宽度过渡 / `.progressIndeterminate`。
 
 ### Shell 与 Overlays
 - Shell：`.shellNav/.navStrip/.navTab/.navActions/.shellMain/.pagePad/.statusBar`；
   `.shellMain` 与 `.pagePad` 构成纵向 flex 链，页面可伸展填充（`.fillCard/.fillViewport`）。
+  - **`.shellNav` 不铺背景色**（与 `.statusBar` 一致）：宿主设置面板底色随主题变化，
+    实测暗色下 `--dsw-alias-bg-base`=#151517 而面板底色=#2c2c2e，铺底色会在导航条两侧
+    形成一条比面板更暗的通栏色块（亮色下两者同为 #fff 才看不出来）。页签分组感由
+    `.navStrip` 自身的 `bg-layer-2` 底色 + 描边承担。
 - Dialog：`.dialogMask/.dialogCard(.dialogWide)/.dialogHeaderRow/.dialogBody(.dialogBodyScroll)`，
   遮罩点击/Esc/取消三途径关闭，busy 禁闭，focus trap，焦点还原。
+  - **尺寸**（2026-09 放大，长内容可读性）：`.dialogCard` = `min(640px, calc(100vw - 48px), 95%)`
+    × `min(600px, calc(100vh - 64px), 92%)`；`.dialogWide` = `min(720px, …, 96%)` ×
+    `min(620px, …, 92%)`；`.dialogBodyScroll` 限高 460px。旧值 380×480 在「配置更改明细 /
+    分区构成」这类长内容下会被压成很窄一列且过早内滚。百分比上限用于兜底宿主导航占宽。
   **Portal 容器必须是插件根节点**（`ConfigManagerSection` 的 `#dsh-config-manager-root`，
   常量 `MODAL_ROOT_ID`）：宿主设置弹窗 overlay 为 `position: fixed; z-index: 1000`，
   弹窗若按 Radix 默认挂到 `document.body` 就成为它的兄弟节点、被 1000 层完全盖住而"隐形"，
@@ -158,6 +171,28 @@ Shell（`ConfigManagerSection`）：导航条 + 页面内容 + 状态栏 + 活�
   与宿主同一层叠上下文（与迁移前内联 `dialogMask` 的层级语义一致）。
 - Drawer：`.drawerMask/.drawerPanel`（右侧 400px；Esc 仅在面板内消费，`stopPropagation`
   避免关闭宿主弹窗）。
+
+### 布局行原语（2026-09 补：把「行」的语义与间距集中定义，禁止各处内联 margin）
+- `.actionRow`：通用操作行（flex + nowrap→wrap，`margin: 0 0 10px`）。
+- `.actionRowTop`：上方紧跟说明文案的操作行（同 `.actionRow` 但**上边距 10px**），
+  用于「hint 之后才是按钮」的场景（如同步页「配置同步通道」）。
+- `.tabRow`：**独占一行**的分段/页签行（`.modeTabs` 是 inline-flex，直接跟在文案后
+  会与文案同行；同步页「默认 / 高级」模式切换须换成本类）。
+- `.headRow`：卡头单行（标题左、动作/徽章右）。与 `.groupHeader` 的区别：不做
+  baseline 对齐（按钮组需居中），且 `.headRow .groupLabel { margin-bottom: 0 }`，
+  否则标题的 8px 下边距会把整行撑高。右侧推靠用既有的 `.statusSpacer`。
+- `.authorRow`：标签 + 值的居中行（关于页作者行），同样带 `.groupLabel{margin-bottom:0}`。
+- **教训（本轮踩到）**：`.field` 自带 `margin-bottom:10px`，任何用 `align-items:flex-end`
+  把「字段」与「按钮」并排的对齐都会因此差 10px（实测 select 底 1042 / 按钮底 1052）。
+  在并排容器里必须把该字段的 margin 归零（见 `.snapshotPickerRow .field`）。
+
+### 表单宽度纪律（本轮修正的回归）
+`.input/.select` **不得**全局 `width:100%`：它们大量出现在行内 flex 容器里
+（市场筛选、同步快照下拉），全局满宽会让每个控件各占一整行。
+满宽只在**纵向**容器内按需生效：`.field > .input/.select { width:100% }`
+（`.field` 是 column flex），路径映射则用 `.pathOld/.pathNew { display:flex;
+flex-direction:column }` 让内部 input 拉满。市场筛选用 `.marketFilterGrid`
+（2 列 grid）+ `.marketFilterSearch`（跨列）+ `.marketFilterMeta`（元信息行）。
 
 ### 页面级模式
 - **Overview 控制中心**：状态条 → 动作工具栏（主操作 + 活动入口右对齐）→
@@ -174,6 +209,21 @@ Shell（`ConfigManagerSection`）：导航条 + 页面内容 + 状态栏 + 活�
 - **冲突解决**（ConflictList）：选边卡片模式——每项一张卡（kindTag 适配器 + 等宽描述），
   保留当前 / 使用备份 两个并排 `.choiceCard`（radio 语义，选中高亮）；批量决策在顶部。
   安全：不回显当前配置值（可能含秘密），不做值级 diff。
+- **配置更改明细**（`.conflictDetail`）：host 拼接的 `[prefix] current=… imported=…` 单行文本，
+  在纯展示层用 `splitConflictDetail` 切成 prefix / current / imported 三段，渲染为
+  「current 独占一行 → 1px 分割线 → imported 独占一行」（`.conflictLine` +
+  `.conflictLine + .conflictLine` 的 border-top），长 JSON 用 `overflow-wrap: anywhere` 折行。
+  **不再用 `<pre>`**：`white-space: pre` 会让长配置横向溢出、出现左右滚动条。
+  注意 `.conflictDetail` 亦被 `SyncConfirmView` 的 `<details>` 复用（该处非 pre，不受影响）。
+- **路径映射**（`PathMappingForm`）：每条 issue 一块 `.pathRow`，**纵向**堆叠 ——
+  「原路径」块（标题 + 等宽路径 + kind）在上、「新路径」块（标题 + input）在下，各自整宽。
+  两个块内的标题用块级元素（`.fieldLabel` 无 display 时是行内元素，会与 input 挤同一行）；
+  `.pathValue` 须 `white-space: pre-wrap`（长路径折行）。
+- **迁移前咨询卡**（`ConsultCard`）：`.consultSection` 包裹「将应用 / 评分维度」两个小节
+  （小节间距 10px）；「建议依据」用 `.reasonList`（`flex-basis: 100%`，在 `.banner` 的
+  flex+wrap 中独占整行）+ `.reasonLine`（每条一行，重复项以 `×N` 徽章标注，去重见
+  `consultReasonGroups`）。`.consultScroll` 带左右 6px 内边距 —— **评分维度行的徽章胶囊
+  原本紧贴容器左边框**（实测 inset 仅 1px，即边框本身），必须留内边距。
 - **导入向导**：6 阶段 Stepper + 分步页面；导入执行页含命令日志面板（`.logPanel`，
   智能贴底滚动 + 「↓ 新输出」提示）。稀疏步骤（选择 ZIP）用 `.sparseFill` **顶部对齐**
   （`justify-content: flex-start`）：内容贴顶、紧跟步骤条，不再垂直居中悬在页面中段。

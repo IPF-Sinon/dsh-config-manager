@@ -24,7 +24,7 @@ import type { ConfigManagerApi } from '../api.ts'
 import type { TranslateNS } from '../client-types.ts'
 import type { RecoveryPort } from '../../ui/types.ts'
 import { RecoveryPanel } from '../recovery/RecoveryPanel.tsx'
-import { Badge, Banner, Button, Card, Checkbox, Empty, IconButton, Segmented, Spinner } from '../common/ui.tsx'
+import { Badge, Banner, Button, Card, Checkbox, Empty, IconButton, Segmented, Spinner, StatusDot } from '../common/ui.tsx'
 import { toast } from '../common/toast-store.ts'
 import { SnapshotIcon, RefreshIcon, DownloadIcon, ImportIcon, InspectIcon, DeleteIcon, ClockIcon, PencilIcon, MessageIcon } from '../common/Icon.tsx'
 import { ConfirmDialog } from '../common/ConfirmDialog.tsx'
@@ -433,7 +433,7 @@ export function SnapshotsPanel({ api, t, recoveryApi, recoveryT }: SnapshotsPane
                         <th style={{ width: 68 }}>{t('snapshots.status')}</th>
                         <th className={css.num} style={{ width: 46 }}>{t('snapshots.entries')}</th>
                         <th className={css.num} style={{ width: 46 }}>{t('snapshots.plugins')}</th>
-                        <th className={css.cellActions} style={{ width: 104 }}>{t('snapshots.actions')}</th>
+                        <th className={css.cellActions} style={{ width: 120 }}>{t('snapshots.actions')}</th>
                       </tr>
                     </thead>
                     <tbody role="listbox" aria-label={t('snapshots.selectHint')}>
@@ -444,6 +444,8 @@ export function SnapshotsPanel({ api, t, recoveryApi, recoveryT }: SnapshotsPane
                             key={meta.id}
                             role="option"
                             aria-selected={selected}
+                            /* 选中淡底：DESIGN.md 数据表 pattern（.dataTable tbody tr[data-selected]），
+                               须与 aria-selected 同步给出，否则 listbox 选中态只剩语义没有视觉反馈 */
                             data-selected={selected ? '' : undefined}
                             style={{ cursor: 'pointer' }}
                             tabIndex={0}
@@ -483,18 +485,6 @@ export function SnapshotsPanel({ api, t, recoveryApi, recoveryT }: SnapshotsPane
                   </table>
                 </div>
               </div>
-
-              {state.selectedId !== null && (
-                <>
-                  {state.planning && !planOpen && <Spinner label={t('common.loading')} />}
-                  {state.plan !== null && !planOpen && (
-                    // 计划已就绪但弹窗已关闭（切页回来 / 刷新恢复）：提供重开入口
-                    <div className={css.actionRow}>
-                      <Button onClick={() => { setPlanOpen(true) }}>{t('snapshots.viewPlan')}</Button>
-                    </div>
-                  )}
-                </>
-              )}
 
               {state.report !== null && (
                 <>
@@ -757,17 +747,26 @@ function BackupScheduleCard({ api, t, onBackupDone }: {
 
   const dirty = backupDraftDirty(draft, saved)
   const busy = saving || running
+  /**
+   * 事实行「备份间隔」文案：整行事实统一取宿主权威值 saved（与事实行语义一致，
+   * 也与 SyncSettingsView 的状态事实行同源——草稿编辑只在下方设置行体现，
+   * 未保存前不改写事实行，避免把未生效的档位显示成已生效）。
+   * custom 档在窄格内显示具体时刻（如「周一 03:00」），其余档位用档位文案；
+   * 均由既有 locale 键拼出，不新增文案键。
+   */
+  const intervalFact = saved === null || !saved.enabled
+    ? '—'
+    : saved.interval === 'custom'
+      ? `${weekdayLabel(t, saved.customSchedule?.dayOfWeek ?? 1)} ${String(saved.customSchedule?.hour ?? 3).padStart(2, '0')}:${String(saved.customSchedule?.minute ?? 0).padStart(2, '0')}`
+      : intervalLabel(t, saved.interval)
 
   return (
     <Card>
-      {/* 单行头：标题 + 上次运行结果徽章 + 时间 + 右侧动作（立即备份 / 保存） */}
+      {/* 头部：标题 + 上次运行结果徽章 + 右侧动作（时间已下移到事实行，头部不再重复） */}
       <div className={css.groupHeader}>
         <span className={css.groupLabel}>{t('backupSchedule.title')}</span>
         {lastRun !== undefined && (
           <Badge kind={backupRunBadgeKind(lastRun)}>{runStatusLabel(t, lastRun)}</Badge>
-        )}
-        {lastRun !== undefined && lastRunDetail !== null && lastRunDetail !== '' && (
-          <span className={css.hint}>{lastRunDetail}</span>
         )}
         <span className={css.statusSpacer} />
         <Button
@@ -783,7 +782,6 @@ function BackupScheduleCard({ api, t, onBackupDone }: {
           {running ? <Spinner /> : t('backupSchedule.runNow')}
         </Button>
       </div>
-      <div className={css.hint}>{t('backupSchedule.hint')}</div>
 
       {status === 'loading' && <Spinner label={t('backupSchedule.loading')} />}
 
@@ -796,26 +794,70 @@ function BackupScheduleCard({ api, t, onBackupDone }: {
 
       {status === 'ready' && (
         <>
-          {/* 设置行：开关 + 间隔 +（custom 时）周几/时刻 */}
-          <div className={css.actionRow} style={{ marginTop: 8, marginBottom: 0 }}>
+          {/* 事实行：开关状态 / 备份间隔（各占半行）+ 上次运行（独占整行）。
+              整行统一取宿主权威值 saved（未保存的草稿编辑不改写事实行，避免把未生效的
+              档位显示成已生效）；时间已从头部移到这里，头部不再重复展示。
+              .factGrid 是 4 列网格，前两格各 span 2 → 上半行两等分、无空列留白。 */}
+          <div className={css.factGrid} style={{ marginTop: 8 }}>
+            <div className={css.factCell} style={{ gridColumn: 'span 2' }}>
+              <span className={css.factLabel}>{t('snapshots.status')}</span>
+              <span className={css.factValue}>
+                {/* 复用既有 .infoValue（inline-flex + 居中 + gap，且不覆盖字号/颜色）做图标文字对齐 */}
+                <span className={css.infoValue}>
+                  <StatusDot kind={(saved?.enabled ?? false) ? 'ok' : 'idle'} />
+                  {(saved?.enabled ?? false) ? t('overview.state.on') : t('overview.state.off')}
+                </span>
+              </span>
+            </div>
+            <div className={css.factCell} style={{ gridColumn: 'span 2' }}>
+              <span className={css.factLabel}>{t('backupSchedule.interval')}</span>
+              <span className={css.factValue}>{intervalFact}</span>
+            </div>
+            {/* 上次运行独占整行（grid-column:1/-1）：lastRunDetail 在「立即备份」成功后
+                是 ZIP 相对路径（可较长），四列窄格会被 text-overflow 截断成「…」。 */}
+            <div className={css.factCell} style={{ gridColumn: '1 / -1' }}>
+              <span className={css.factLabel}>{t('backupSchedule.lastRun')}</span>
+              <span className={css.factValue}>
+                {lastRun === undefined
+                  /* 从未运行：只给一句事实，不补「—」占位（避免「从未运行 —」的双重否定感） */
+                  ? <span className={css.hint}>{t('backupSchedule.never')}</span>
+                  : (
+                    <span className={css.infoValue}>
+                      <Badge kind={backupRunBadgeKind(lastRun)}>{runStatusLabel(t, lastRun)}</Badge>
+                      <span className={css.mono}>
+                        {lastRunDetail !== null && lastRunDetail !== '' ? lastRunDetail : '—'}
+                      </span>
+                    </span>
+                  )}
+              </span>
+            </div>
+          </div>
+          {/* 卡片级说明（小字）：保留在事实行下方、设置行上方 —— 信息分层依次是
+              头部（标题/徽章/动作）→ 事实行 → 说明 → 设置 */}
+          <div className={css.hint} style={{ marginTop: 8 }}>{t('backupSchedule.hint')}</div>
+
+          {/* 设置行：开关（短标签）+（已开启时）间隔 / 周几 / 时刻 */}
+          <div className={css.actionRow} style={{ marginTop: 10, marginBottom: 0 }}>
             <Checkbox
               checked={draft.enabled}
               onChange={(checked) => { updateDraft({ ...draft, enabled: checked }) }}
-              label={t('backupSchedule.enabledHint')}
+              label={t('backupSchedule.enabled')}
               disabled={busy}
             />
-            <select
-              className={css.select}
-              value={draft.interval}
-              disabled={busy}
-              style={{ width: 'auto' }}
-              onChange={(event) => { updateDraft({ ...draft, interval: event.target.value as BackupInterval }) }}
-            >
-              {BACKUP_INTERVAL_OPTIONS.map((interval) => (
-                <option key={interval} value={interval}>{intervalLabel(t, interval)}</option>
-              ))}
-            </select>
-            {draft.interval === 'custom' && (
+            {draft.enabled && (
+              <select
+                className={css.select}
+                value={draft.interval}
+                disabled={busy}
+                style={{ width: 'auto' }}
+                onChange={(event) => { updateDraft({ ...draft, interval: event.target.value as BackupInterval }) }}
+              >
+                {BACKUP_INTERVAL_OPTIONS.map((interval) => (
+                  <option key={interval} value={interval}>{intervalLabel(t, interval)}</option>
+                ))}
+              </select>
+            )}
+            {draft.enabled && draft.interval === 'custom' && (
               <select
                 className={css.select}
                 value={draft.customSchedule?.dayOfWeek ?? 1}
@@ -837,7 +879,7 @@ function BackupScheduleCard({ api, t, onBackupDone }: {
                 ))}
               </select>
             )}
-            {draft.interval === 'custom' && (
+            {draft.enabled && draft.interval === 'custom' && (
               <select
                 className={css.select}
                 value={draft.customSchedule?.hour ?? 3}
@@ -857,7 +899,7 @@ function BackupScheduleCard({ api, t, onBackupDone }: {
                 {Array.from({ length: 24 }, (_, h) => <option key={h} value={h}>{String(h).padStart(2, '0')}:00</option>)}
               </select>
             )}
-            {draft.interval === 'custom' && (
+            {draft.enabled && draft.interval === 'custom' && (
               <select
                 className={css.select}
                 value={draft.customSchedule?.minute ?? 0}
@@ -878,18 +920,19 @@ function BackupScheduleCard({ api, t, onBackupDone }: {
               </select>
             )}
           </div>
-          {lastRunDetail !== null && lastRunDetail !== '' && (
-            <div className={css.hint} style={{ marginTop: 6 }}>
-              {t('backupSchedule.lastRun')}：{lastRunDetail}
+          {/* 设置行说明：勾选启用后启动即执行一次（行为说明；卡片级 hint 只讲「备什么」，
+              此处讲「何时跑」，两者语义不重复，故仅在已开启时出现，避免未开启时的说明噪音） */}
+          {draft.enabled && <div className={css.hint} style={{ marginTop: 6 }}>{t('backupSchedule.enabledHint')}</div>}
+          {/* custom 档专属说明：仅在已开启且选中自定义档时出现，紧贴上面的三个时刻下拉 */}
+          {draft.enabled && draft.interval === 'custom' && <div className={css.hint} style={{ marginTop: 6 }}>{t('backupSchedule.customHint')}</div>}
+          {/* P1-⑨：连续失败主动标红（≥1 次失败即在设置卡内醒目提示，恒在卡片底部、成块不被拆散） */}
+          {(saved?.consecutiveFailures ?? 0) > 0 && (
+            <div style={{ marginTop: 8 }}>
+              <Banner kind="error" >
+                {t('backupSchedule.consecutiveFailures', { count: String(saved!.consecutiveFailures) })}
+              </Banner>
             </div>
           )}
-          {/* P1-⑨：连续失败主动标红（≥1 次失败即在设置卡内醒目提示） */}
-          {(saved?.consecutiveFailures ?? 0) > 0 && (
-            <Banner kind="error" >
-              {t('backupSchedule.consecutiveFailures', { count: String(saved!.consecutiveFailures) })}
-            </Banner>
-          )}
-          {draft.interval === 'custom' && <div className={css.hint} style={{ marginTop: 6 }}>{t('backupSchedule.customHint')}</div>}
         </>
       )}
 
@@ -1066,7 +1109,7 @@ function BackupFilesCard({ api, t, refreshTick }: {
                   <th>{t('backupFiles.name')}</th>
                   <th className={css.num} style={{ width: 64 }}>{t('backupFiles.size')}</th>
                   <th style={{ width: 130 }}>{t('backupFiles.time')}</th>
-                  <th className={css.cellActions} style={{ width: 138 }}>{t('snapshots.actions')}</th>
+                  <th className={css.cellActions} style={{ width: 152 }}>{t('snapshots.actions')}</th>
                 </tr>
               </thead>
               <tbody>

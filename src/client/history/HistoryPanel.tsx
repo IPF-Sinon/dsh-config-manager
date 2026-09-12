@@ -19,7 +19,8 @@ import { ErrorBanner } from '../common/ErrorBanner.tsx'
 import { toast } from '../common/toast-store.ts'
 import {
   resultBadgeKind, kindLabelKey, groupByKind, summarize,
-  filterByText, applyRecent, HISTORY_KIND_OPTIONS, HISTORY_RESULT_OPTIONS,
+  filterByText, applyRecent, filterByKindResult,
+  collectHistoryKinds, collectHistoryResults,
   type HistoryFilter,
 } from '../../ui/history-model.ts'
 import type { StoredMigrationHistoryEntry } from '../../core/migration-history.ts'
@@ -103,13 +104,20 @@ export function HistoryPanel({ historyApi, t }: HistoryPanelProps) {
   }
 
   const entries = state.result?.entries ?? []
-  // 过滤（后端 kind/result + 客户端 recent/文本子串）
-  let filtered = entries
+  // 过滤链（顺序刻意如此：kind/result → recent → 文本）
+  // ① kind/result：前端收敛（后端 list 一次性全量返回；filterToQuery 描述的 query 契约保留可用）
+  // ② recent：按时间倒序截断，必须发生在文本过滤之前，否则「最近 N 条」语义会被文本命中数影响
+  // ③ 文本：summary/error/kind/sections 子串
+  let filtered = filterByKindResult(entries, state.filter.kind, state.filter.result)
   if (state.filter.recent !== undefined && state.filter.recent > 0) filtered = applyRecent(filtered, state.filter.recent)
   filtered = filterByText(filtered, state.filter.query)
   const summary = summarize(filtered)
   const groups = groupByKind(filtered)
   const corrupted = state.result?.corrupted ?? []
+  // 下拉选项：只列当前数据里真实存在的 kind/result（全量 14 类里多数永远不会出现），
+  // 并强制并入当前选中值 —— 否则会出现「选中了却在下拉里找不到该项」的怪状态。
+  const kindOptions = collectHistoryKinds(entries, state.filter.kind)
+  const resultOptions = collectHistoryResults(entries, state.filter.result)
 
   return (
     <div className={css.viewBody}>
@@ -141,7 +149,7 @@ export function HistoryPanel({ historyApi, t }: HistoryPanelProps) {
             onChange={(e) => setFilter({ kind: e.target.value === '' ? undefined : e.target.value as never })}
           >
             <option value="">{t('history.filter.kind')}: 全部</option>
-            {HISTORY_KIND_OPTIONS.map((k) => (
+            {kindOptions.map((k) => (
               <option key={k} value={k}>{t(kindLabelKey(k))}</option>
             ))}
           </select>
@@ -151,7 +159,7 @@ export function HistoryPanel({ historyApi, t }: HistoryPanelProps) {
             onChange={(e) => setFilter({ result: e.target.value === '' ? undefined : e.target.value as never })}
           >
             <option value="">{t('history.filter.result')}: 全部</option>
-            {HISTORY_RESULT_OPTIONS.map((r) => (
+            {resultOptions.map((r) => (
               <option key={r} value={r}>{t(`history.result.${r}`)}</option>
             ))}
           </select>

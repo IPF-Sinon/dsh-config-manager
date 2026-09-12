@@ -8,7 +8,8 @@ import assert from 'node:assert/strict';
 import type { StoredMigrationHistoryEntry } from '../core/migration-history.ts';
 import {
   resultBadgeKind, kindLabelKey, groupByKind, summarize, applyRecent, filterByText,
-  filterToQuery, HISTORY_KIND_OPTIONS, HISTORY_RESULT_OPTIONS,
+  filterToQuery, collectHistoryKinds, collectHistoryResults, filterByKindResult,
+  HISTORY_KIND_OPTIONS, HISTORY_RESULT_OPTIONS,
 } from './history-model.ts';
 
 function mkEntry(partial: Partial<StoredMigrationHistoryEntry> & { kind: StoredMigrationHistoryEntry['kind'] }): StoredMigrationHistoryEntry {
@@ -117,4 +118,78 @@ test('sensitive：纯模型不泄露 secret（kind/results 为枚举）', () => 
   assert.equal(groups[0]!.entries[0]!.kind, 'import');
   // summary 是自由文本，但模型不做任何解密/展开——脱敏由上层负责
   assert.equal(groups[0]!.entries[0]!.summary, 'password=secret123');
+});
+
+/* ---------------- 需求 10：分类筛选真正生效 + 只列真实分类 ---------------- */
+
+test('filterByKindResult：空/undefined = 不过滤（且原样返回，零分配）', () => {
+  const entries = [
+    mkEntry({ kind: 'import', result: 'success' }),
+    mkEntry({ kind: 'backup', result: 'failed' }),
+  ];
+  assert.equal(filterByKindResult(entries), entries);
+  assert.equal(filterByKindResult(entries, undefined, undefined), entries);
+  // select 的 value='' 语义（运行时兜底）
+  assert.equal(filterByKindResult(entries, '' as never, '' as never), entries);
+});
+
+test('filterByKindResult：单条件过滤 + 双条件取交集 + 保持输入顺序', () => {
+  const entries = [
+    mkEntry({ kind: 'import', result: 'success', summary: 'a' }),
+    mkEntry({ kind: 'import', result: 'failed', summary: 'b' }),
+    mkEntry({ kind: 'backup', result: 'success', summary: 'c' }),
+  ];
+  const onlyImport = filterByKindResult(entries, 'import', undefined);
+  assert.deepEqual(onlyImport.map((e) => e.summary), ['a', 'b']); // 顺序保持
+  const onlyFailed = filterByKindResult(entries, undefined, 'failed');
+  assert.equal(onlyFailed.length, 1);
+  assert.equal(onlyFailed[0]!.summary, 'b');
+  // 交集：import ∩ success = 1（import ∩ skipped = 0，不回落为并集）
+  assert.deepEqual(filterByKindResult(entries, 'import', 'success').map((e) => e.summary), ['a']);
+  assert.equal(filterByKindResult(entries, 'import', 'skipped').length, 0);
+});
+
+test('filterByKindResult：过滤后 summarize 随之变化（统计徽章反映筛选结果）', () => {
+  const entries = [
+    mkEntry({ kind: 'import', result: 'success' }),
+    mkEntry({ kind: 'backup', result: 'success' }),
+    mkEntry({ kind: 'backup', result: 'failed' }),
+  ];
+  assert.equal(summarize(entries).total, 3);
+  const s = summarize(filterByKindResult(entries, 'backup'));
+  assert.equal(s.total, 2);
+  assert.equal(s.success, 1);
+  assert.equal(s.failed, 1);
+});
+
+test('collectHistoryKinds：只返回数据里真实存在的 kind，去重且保持清单顺序', () => {
+  const entries = [
+    mkEntry({ kind: 'backup' }),
+    mkEntry({ kind: 'import' }),
+    mkEntry({ kind: 'backup' }),
+  ];
+  // 去重 + 按 HISTORY_KIND_OPTIONS 顺序（import 在 backup 之前）
+  assert.deepEqual(collectHistoryKinds(entries), ['import', 'backup']);
+  assert.deepEqual(collectHistoryKinds([]), []);
+});
+
+test('collectHistoryKinds：keepSelected 让「选中但数据里已不存在」的项保留在选项里', () => {
+  const entries = [mkEntry({ kind: 'backup' })];
+  assert.deepEqual(collectHistoryKinds(entries), ['backup']);
+  // 选中 profile-save（数据里没有）→ 仍出现在选项里，位置按清单顺序（profile-save 在 backup 之前）
+  assert.deepEqual(collectHistoryKinds(entries, 'profile-save'), ['profile-save', 'backup']);
+  // 选中值已存在时不重复
+  assert.deepEqual(collectHistoryKinds(entries, 'backup'), ['backup']);
+});
+
+test('collectHistoryResults：只返回数据里真实出现过的 result（含 keepSelected）', () => {
+  const entries = [mkEntry({ kind: 'import', result: 'success' }), mkEntry({ kind: 'import', result: 'success' })];
+  assert.deepEqual(collectHistoryResults(entries), ['success']);
+  assert.deepEqual(collectHistoryResults(entries, 'failed'), ['success', 'failed']);
+  assert.deepEqual(collectHistoryResults([], 'skipped'), ['skipped']);
+  // 顺序恒为 HISTORY_RESULT_OPTIONS（success → failed → skipped）
+  assert.deepEqual(
+    collectHistoryResults([mkEntry({ kind: 'import', result: 'skipped' }), mkEntry({ kind: 'import', result: 'success' })]),
+    ['success', 'skipped'],
+  );
 });

@@ -57,12 +57,13 @@ export function PathMappingForm({ issues, initial, t, onChange }: PathMappingFor
       {issues.map((issue) => (
         <div key={issue.value} className={css.pathRow}>
           <div className={css.pathOld}>
-            <span className={css.fieldLabel}>{t('import.paths.old')}</span>
+            {/* 块级 label：标题独占一行（原 span 为行内元素，会与 input 挤在同一行） */}
+            <div className={css.fieldLabel}>{t('import.paths.old')}</div>
             <pre className={css.pathValue}>{issue.value}</pre>
             <span className={css.pathIssueKind}>{issue.kind}</span>
           </div>
           <div className={css.pathNew}>
-            <span className={css.fieldLabel}>{t('import.paths.new')}</span>
+            <div className={css.fieldLabel}>{t('import.paths.new')}</div>
             <input
               className={css.input}
               value={drafts[issue.value] ?? ''}

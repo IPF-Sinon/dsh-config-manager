@@ -83,14 +83,17 @@
 
 /* ================================================================ §2 Shell */
 
-/* —— 顶部导航条：左侧页签（圆角分段条），右侧图标动作 —— */
+/* —— 顶部导航条：左侧页签（圆角分段条），右侧图标动作 ——
+   刻意**不铺背景色**：宿主设置面板底色随主题变化（暗色面板 = #2c2c2e，
+   而 --dsw-alias-bg-base = #151517），铺底色会在导航条两侧形成一条比面板更暗的
+   通栏色块（亮色下两者同为 #fff 才看不出来）。页签分组感由 .navStrip 自身的
+   底色 + 描边承担，与底部 .statusBar 的「不铺底色」保持一致。 */
 .shellNav {
   display: flex;
   align-items: center;
   gap: 8px;
   flex: none;
   padding: 8px;
-  background: var(--dsw-alias-bg-base);
 }
 
 .navStrip {
@@ -406,6 +409,15 @@
   font: inherit;
   font-size: 12.5px;
   color: var(--dsw-alias-label-primary);
+  box-sizing: border-box;
+}
+
+/* 满宽仅限**纵向**容器内的字段（.field 是 column flex，需要拉满）：
+   不可全局设 width:100% —— 那会让行内 flex 容器里的每个 select 各占一整行
+   （市场页筛选、同步页快照下拉都曾被撑成整行）。 */
+.field > .input,
+.field > .select {
+  width: 100%;
 }
 
 .input::placeholder {
@@ -526,6 +538,9 @@
   background: var(--dsw-alias-bg-layer-2);
   font-size: 12.5px;
   margin: 0 0 10px;
+  /* 通栏元素：flex 父容器（.viewBody 等）里不随内容收缩 */
+  width: 100%;
+  box-sizing: border-box;
 }
 
 .banner[data-kind='ok'] {
@@ -678,6 +693,9 @@
   text-align: center;
   font-size: 12px;
   color: var(--dsw-alias-label-tertiary);
+  /* 通栏占位：不被 flex 父容器压成内容宽 */
+  width: 100%;
+  box-sizing: border-box;
 }
 
 /* 居中空态页（大块空视图：垂直居中 + 图形 + CTA，替代贴顶小虚线框） */
@@ -722,6 +740,14 @@
   background: var(--dsw-alias-bg-layer-2);
   overflow: hidden;
   margin-bottom: 10px;
+}
+
+/* 表格用固定布局（.tableFixed）时列宽容易偏紧：给每列留一点水平呼吸，
+   避免内容差几个像素就触发单元格省略号（操作列的「…」即由此而来）。 */
+.tableFixed th,
+.tableFixed td {
+  padding-left: 12px;
+  padding-right: 12px;
 }
 
 .tableScroll {
@@ -813,6 +839,15 @@
 .dataTable .cellActions {
   text-align: right;
   white-space: nowrap;
+}
+
+/* 操作列内容优先完整展示：.tableFixed 给所有单元格都加了
+   `overflow:hidden; text-overflow:ellipsis`，列宽略紧时行内操作按钮后会被
+   浏览器补一个「…」省略号（备份页两张表都出现过）。操作列是按钮组，
+   宁可略微溢出也不截断，故这里单独放开省略号。 */
+.dataTable td.cellActions {
+  overflow: visible;
+  text-overflow: clip;
 }
 
 .rowActions {
@@ -1219,6 +1254,12 @@ button.statCard:focus-visible {
   background: var(--dsw-alias-bg-base);
 }
 
+/* 咨询卡的评分维度：留出左右内边距 —— 维度行的徽章胶囊原本紧贴容器左边框
+   （实测仅 1px，即边框本身），右侧也贴着滚动条。 */
+.consultScroll {
+  padding: 0 6px;
+}
+
 .logScroll {
   overflow: auto;
   max-height: 220px;
@@ -1249,9 +1290,15 @@ button.statCard:focus-visible {
 }
 
 .dialogCard {
-  width: 380px;
+  /* 弹窗尺寸（2026-09 放大）：旧值 380×480 在长内容（配置更改明细 / 分区构成）
+     下可读性差 —— 内容被压成很窄的一列、且正文很早就开始内滚。
+     现按宿主设置弹窗的可见范围（min(800px, 100vw-48px)）取整：宽 640、高 600
+     （接近插件画布 564×720 的观感），并给长行留足横向余量。
+     说明：Radix Portal 落在插件根节点内，而插件在宿主 800px 面板中，
+     因此 vw/vh 基准约等于面板尺寸；乘以 0.95/0.92 后再减去宿主导航余量兜底。 */
+  width: min(640px, calc(100vw - 48px), 95%);
   max-width: calc(100vw - 48px);
-  max-height: min(480px, calc(100vh - 64px));
+  max-height: min(600px, calc(100vh - 64px), 92%);
   display: flex;
   flex-direction: column;
   border: 1px solid var(--dsw-alias-border-l1);
@@ -1278,6 +1325,8 @@ button.statCard:focus-visible {
   margin-left: auto;
 }
 
+/* 弹窗正文区：padding 拆分为上下与左右，便于给「迁移前咨询」这类内嵌卡片
+   单独收窄左右内边距（见 .dialogBodyConsult）。 */
 .dialogBody {
   flex: 1 1 auto;
   min-height: 0;
@@ -1289,11 +1338,12 @@ button.statCard:focus-visible {
 
 .dialogBodyScroll {
   overflow-y: auto;
-  max-height: 240px;
+  max-height: 460px;
 }
 
 .dialogWide {
-  width: 480px;
+  width: min(720px, calc(100vw - 48px), 96%);
+  max-height: min(620px, calc(100vh - 64px), 92%);
 }
 
 /* 弹窗底部按钮区：右对齐，顶部分隔线，与正文区分 */
@@ -1455,6 +1505,103 @@ button.statCard:focus-visible {
   gap: 8px;
   flex-wrap: wrap;
   margin: 0 0 10px;
+}
+
+/* 上方有说明文案的操作行（如「通道配置」按钮紧跟在 hint 之后）：
+   补一点上边距，避免按钮与说明文字贴在一起。 */
+.actionRowTop {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin: 10px 0 10px;
+}
+
+/* 独占一行的分段/页签行（如同步页「默认 / 高级」模式切换）：
+   与上方说明文案分行，自身作为独立行块。
+   注意：本类必须**自带分段控件外壳**（border/radius/padding/bg-base），
+   否则 `.modeTab[data-active]` 的选中底色（layer-2）会与 Card 底色相同而「隐形」。 */
+.tabRow {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex-wrap: wrap;
+  width: fit-content;
+  padding: 2px;
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 7px;
+  background: var(--dsw-alias-bg-base);
+  margin: 10px 0 10px;
+}
+
+/* 同步页「选择历史快照」空态提示行（原为行内 hint，独立成行以保持下拉与按钮同基线） */
+.snapshotPickerHint {
+  margin-top: 4px;
+  margin-bottom: 10px;
+}
+
+/* 卡头单行（标题 + 右侧动作/徽章）：标题左、其余右。
+   与 .groupHeader 的区别：本类不做 baseline 对齐（按钮组需要居中），
+   且内嵌 .groupLabel 不保留底部外边距（否则整行会被撑高）。 */
+.headRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin: 0 0 10px;
+}
+
+.headRow .groupLabel {
+  margin-bottom: 0;
+}
+
+/* 作者行（关于页）：标签与作者名基线对齐 */
+.authorRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 8px;
+}
+
+/* 定时备份卡：事实行与设置行沿用统一下边距节奏（替代组件内联 style） */
+.scheduleFacts {
+  margin-top: 8px;
+}
+
+.scheduleRow {
+  margin-top: 10px;
+}
+
+.scheduleNote {
+  margin-top: 6px;
+}
+
+.authorRow .groupLabel {
+  margin-bottom: 0;
+}
+
+/* 市场条目筛选区：搜索框跨整行，其下 4 个下拉两两一行（2×2）。
+   用 grid 而非 flex：列宽严格等分，窄画布下也不会出现「每行只放得下 1 个」
+   或「控件被内容宽度挤歪」。 */
+.marketFilterGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.marketFilterSearch {
+  grid-column: 1 / -1;
+}
+
+/* 筛选区下方的元信息行（分区未知提示 + 条目计数徽章） */
+.marketFilterMeta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 8px;
 }
 
 .pushRight {
@@ -1799,10 +1946,12 @@ button.statCard:focus-visible {
   text-overflow: ellipsis;
 }
 
-/* —— 分区构成卡：两列网格行（名称 | 条目数 | 体积） —— */
+/* —— 分区构成卡：两列网格行（名称 | 条目数 | 体积） ——
+   用 auto-fit，窄容器（弹窗内的分区构成）自动退化为单列，
+   宽容器（总览 / 导出预览弹窗）仍是两列。 */
 .sectionGrid {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
   gap: 0 28px;
 }
 
@@ -2042,6 +2191,29 @@ button.statCard:focus-visible {
   color: var(--dsw-alias-label-tertiary);
 }
 
+/* 咨询卡「建议依据」：去重后每条独占一行。
+   flex-basis:100% 是必需的 —— .banner 是 flex+wrap，「建议依据」标题与
+   本列表是同一行的兄弟项，列表必须独占整行才谈得上「换行」。 */
+.reasonList {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  flex-basis: 100%;
+  min-width: 0;
+}
+
+.reasonLine {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+}
+
+.reasonLine > span:first-child {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
 /* ================================================================ §9 Page: Export / Import */
 
 .viewBody {
@@ -2167,10 +2339,12 @@ button.statCard:focus-visible {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 0 10px;
-  padding: 8px 10px;
-  border: 1px solid var(--dsw-alias-border-l2);
-  border-radius: 7px;
-  background: var(--dsw-alias-bg-base);
+  padding: 0;
+  border: none;
+  border-radius: 0;
+  /* 与页面同底：原先用 --dsw-alias-bg-base，暗色下比宿主面板底色更暗
+     （#151517 vs #2c2c2e），「自定义文件名 / 备注」会呈现成一块突兀的深色面板。 */
+  background: none;
   margin: 6px 0 10px;
 }
 
@@ -2190,6 +2364,12 @@ button.statCard:focus-visible {
   align-items: center;
   gap: 10px;
   margin-bottom: 10px;
+}
+
+/* 配置更改明细（ConflictList 的 .conflictDetail）与路径映射块都已经自带
+   边框与内边距，这里补一点与上方描述之间的呼吸。 */
+.conflictDetail {
+  margin-top: 2px;
 }
 
 /* 冲突列表 */
@@ -2290,6 +2470,41 @@ button.statCard:focus-visible {
   font-size: 11px;
   color: var(--dsw-alias-label-secondary);
   overflow-wrap: anywhere;
+  /* 原为 <pre>（white-space:pre 不换行）→ 长配置会横向溢出并产生左右滚动条；
+     现改普通块：换行（含长路径/JSON 的任意位置折行）。 */
+  white-space: normal;
+}
+
+/* 配置更改明细：prefix（如 namespace= / 行号）→ current 行 → 分割线 → imported 行 */
+.conflictPrefix {
+  margin-bottom: 4px;
+  color: var(--dsw-alias-label-tertiary);
+}
+
+.conflictLine {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 5px 0;
+}
+
+/* 两行之间的分割线（第一行不加，避免与容器上边框重复） */
+.conflictLine + .conflictLine {
+  border-top: 1px solid color-mix(in srgb, var(--dsw-alias-border-l1) 55%, transparent);
+}
+
+.conflictLineLabel {
+  flex: none;
+  min-width: 56px;
+  font-weight: 600;
+  color: var(--dsw-alias-label-tertiary);
+}
+
+.conflictLineValue {
+  flex: 1 1 auto;
+  min-width: 0;
+  /* 长 JSON 不撑破容器：任意位置折行 */
+  overflow-wrap: anywhere;
 }
 
 /* 路径映射 */
@@ -2300,10 +2515,16 @@ button.statCard:focus-visible {
   margin-bottom: 10px;
 }
 
+/* 路径映射：每条 issue = 「原路径」块在上、「新路径」块在下（各自整宽） */
 .pathRow {
   display: flex;
-  align-items: center;
+  flex-direction: column;
+  align-items: stretch;
   gap: 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--dsw-alias-border-l1);
+  border-radius: 7px;
+  background: var(--dsw-alias-bg-layer-2);
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-size: 11px;
 }
@@ -2311,6 +2532,11 @@ button.statCard:focus-visible {
 .pathOld,
 .pathNew {
   min-width: 0;
+  width: 100%;
+  /* 纵向列容器：让内部 input 拉满块宽（等价于旧版全局 .input{width:100%} 的效果，
+     但不影响行内 flex 里的 select） */
+  display: flex;
+  flex-direction: column;
   padding: 5px 8px;
   border: 1px solid var(--dsw-alias-border-l2);
   border-radius: 6px;
@@ -2321,6 +2547,10 @@ button.statCard:focus-visible {
 
 .pathValue {
   color: var(--dsw-alias-label-secondary);
+  /* 等宽长路径折行：<pre> 默认不换行会横向溢出卡片 */
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  margin: 2px 0 0;
 }
 
 .pathIssueKind {
@@ -2331,6 +2561,30 @@ button.statCard:focus-visible {
 .secretsList {
   display: flex;
   flex-direction: column;
+}
+
+/* 快照选择行（同步页）：下拉 + 「刷新快照列表」按钮强制同一行 ——
+   nowrap + 下拉列可收缩（minWidth:0）+ 按钮列 flex:none。
+   窄画布下宁可下拉变窄，也不让按钮换到下一行。 */
+.snapshotPickerRow {
+  display: flex;
+  align-items: flex-end;
+  flex-wrap: nowrap;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+/* 该行内的字段标签归零底部外边距：.field 自带 margin-bottom:10px，
+   会让标签的 margin-box 比 select 低 10px，flex-end 对齐时按钮
+   被一并推低 10px（实测 select 底 1042 vs 按钮底 1052）→ 视觉上「不在一条线上」。 */
+.snapshotPickerRow .field {
+  margin-bottom: 0;
+}
+
+.pickerAction {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
 }
 
 /* 导入日志面板 */
@@ -2516,6 +2770,25 @@ button.statCard:focus-visible {
   margin-top: 8px;
 }
 
+/* 徽章行下方留出间距，避免与紧随其后的面板（兼容性/导入预览的黄色警示条、
+   咨询卡的建议依据）挤在一起；作为容器末子元素时不补（否则卡片底部会多一段空白）。 */
+.statRow:not(:last-child) {
+  margin-bottom: 10px;
+}
+
+/* 咨询卡内的徽章行：与上方小节标题拉开一点距离（原先与标题贴在一起） */
+.consultSection {
+  margin-top: 10px;
+}
+
+.consultSection:first-of-type {
+  margin-top: 8px;
+}
+
+.consultSection .statRow {
+  margin-top: 0;
+}
+
 .hiddenFile {
   display: none;
 }
@@ -2629,6 +2902,26 @@ button.profileRowMain:hover {
   align-items: center;
   gap: 8px;
   flex-wrap: wrap;
+}
+
+/* 作者名外链（AboutPanel）：该组件一直在引用本类，但此前从未定义 ——
+   作者名因此落回浏览器默认 <a> 样式（下划线 + 字号/行高与相邻标签不一致）。 */
+.aboutAuthor {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--dsw-alias-state-business-primary);
+  text-decoration: none;
+  overflow-wrap: anywhere;
+}
+
+.aboutAuthor:hover {
+  text-decoration: underline;
+}
+
+.aboutAuthor:focus-visible {
+  outline: 2px solid var(--dsw-alias-state-business-primary);
+  outline-offset: 1px;
+  border-radius: 4px;
 }
 
 .consultDimension {

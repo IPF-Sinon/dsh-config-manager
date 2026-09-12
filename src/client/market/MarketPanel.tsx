@@ -576,12 +576,15 @@ export function MarketPanel({ api, myConfigsApi, importApi, syncApi, t }: Market
       {!downloadOpen && (
         <Card>
           {state.loadError !== null && <Empty>{t('list.empty')}</Empty>}
-          {state.loadError === null && (
-            <div className={css.statRow}>
+          {state.loadError === null && (<>
+            {/* 筛选控件 2×2 网格（搜索框跨两列 + 4 个 select 两两一行）：
+                上一轮全局 .input/.select 的 width:100% 已移除，靠本网格类承担排布，
+                窄画布（宿主设置弹窗 564px）下 2 列优于 4 列。 */}
+            <div className={css.marketFilterGrid}>
               {/* 搜索 + 类别过滤 + 来源筛选 + 排序（2026-08-21 新增；状态镜像 runStore） */}
               <input
                 type="text"
-                className={css.input}
+                className={`${css.input} ${css.marketFilterSearch}`}
                 value={state.search}
                 placeholder={t('list.searchPlaceholder')}
                 onChange={(e: ChangeEvent<HTMLInputElement>) => { patch({ search: e.target.value }) }}
@@ -603,9 +606,6 @@ export function MarketPanel({ api, myConfigsApi, importApi, syncApi, t }: Market
                 <option value="">{t('list.sectionsAll')}</option>
                 {sectionOptions.map((s) => <option key={s} value={s}>{s}</option>)}
               </select>
-              {state.sectionFilter !== '' && sectionFilterUnknown > 0 && (
-                <span className={css.hint}>{t('list.sectionsUnknown', { count: String(sectionFilterUnknown) })}</span>
-              )}
               <select
                 className={css.select}
                 value={state.source}
@@ -629,6 +629,12 @@ export function MarketPanel({ api, myConfigsApi, importApi, syncApi, t }: Market
                 <option value="stars">{t('list.sortStars')}</option>
                 <option value="name">{t('list.sortName')}</option>
               </select>
+            </div>
+            <div className={css.marketFilterMeta}>
+              {/* P2-⑭ 提示行（分区筛选生效且存在分区未知条目）：原夹在下拉之间，随网格重构移到计数行 */}
+              {state.sectionFilter !== '' && sectionFilterUnknown > 0 && (
+                <span className={css.hint}>{t('list.sectionsUnknown', { count: String(sectionFilterUnknown) })}</span>
+              )}
               <Badge kind="info">
                 {filtered.length > 0
                   ? (filtered.length < summary.total
@@ -637,7 +643,7 @@ export function MarketPanel({ api, myConfigsApi, importApi, syncApi, t }: Market
                   : t('list.count', { count: String(summary.total) })}
               </Badge>
             </div>
-          )}
+          </>)}
           {state.browsing && <div className={css.statRow}>{<Spinner label={t('list.loading')} />}</div>}
           {!state.browsing && state.loadError === null && state.items.length === 0 && <Empty>{t('list.noItems')}</Empty>}
           {/* 条目卡片列表 */}

@@ -6,15 +6,16 @@
  *   2. 自定义模式：分组分区目录（两列致密勾选；分区说明入 tooltip；设备相关/敏感徽章内联）
  *   3. 选项行：加密备份 / 导出密钥 复选 +（加密时）密码双列内联
  *   4. 命名行：自定义文件名 + 备注 双列
- *   5. 预览横幅 / 进度条 / 诚实报告 + 自动下载提示
+ *   5. 进度条 / 诚实报告 + 自动下载提示
+ *   6. 预览弹窗（Modal wide）：合计一行 + 分区构成网格（与总览页共用 SectionComposition）
  *
  * 业务能力（全部保留，与旧版一致）：
  * - Quick：一键导出推荐分区（ExportFlow.quickSelection()）；
- * - Custom：按分组逐项勾选，ExportFlow.validateSelection() 给出设备相关分区警告；
+ * - Custom：按分组逐项勾选（设备相关 / 敏感分区以内联徽章标注）；
  * - 安全选项：加密备份（AES-256-GCM）与导出密钥两个独立选项；勾选导出密钥自动联动
  *   勾选加密（密钥绝不明文），取消加密一并取消导出密钥（includeSecrets ⇒ encrypt）；
  * - 自定义文件名（失焦自动补全 .zip；合法性校验与宿主一致）+ 备注；
- * - 导出前只读预览（export-preview 端点，零写入）；
+ * - 导出前只读预览（export-preview 端点，零写入；结果在弹窗内呈现）；
  * - 密码仅内存（api.exportPassword 随请求体传输，绝不落盘/入 sessionStorage）；
  * - 导出完成自动下载到浏览器「下载」目录（可再手动下载）。
  *
@@ -31,6 +32,8 @@ import type { ConfigManagerApi, ExportPreviewResponse } from '../api.ts'
 import { runStore, type ExportMode } from '../run-store.ts'
 import { formatBytes } from '../../ui/report.ts'
 import { Badge, Banner, Button, Checkbox, Segmented, Spinner } from '../common/ui.tsx'
+import { SectionComposition } from '../common/SectionComposition.tsx'
+import { Modal } from '../common/Modal.tsx'
 import { PreviewIcon } from '../common/Icon.tsx'
 import { ErrorBanner } from '../common/ErrorBanner.tsx'
 import { ProgressBar } from '../common/ProgressBar.tsx'
@@ -78,11 +81,15 @@ export function ExportView({ api, t }: ExportViewProps) {
     result: ExportPreviewResponse | null
     error: string | null
   } | null>(null)
+  /** 需求 6：预览结果弹窗开关（点击「预览将导出内容」即打开，结果/错误/loading 均在弹窗内呈现） */
+  const [previewOpen, setPreviewOpen] = useState(false)
 
   /** P2-⑫：请求导出前预览（不落盘；按当前模式的分区选择） */
   const runPreview = async (): Promise<void> => {
     if (running) return
     setPreview({ loading: true, result: null, error: null })
+    // 需求 6：立即打开弹窗，loading 态在弹窗内呈现（工具栏按钮仍显示 Spinner）
+    setPreviewOpen(true)
     try {
       const only = mode === 'quick' ? flow.quickSelection() : [...selection]
       const result = await api.exportPreview(only)
@@ -191,9 +198,6 @@ export function ExportView({ api, t }: ExportViewProps) {
     }
   }
 
-  // Custom 模式下的设备相关分区警告
-  const customWarnings = mode === 'custom' ? flow.validateSelection(selection).warnings : []
-
   return (
     <div className={css.viewBody}>
       {/* 1. 工具栏：模式 + 预览 + 执行 */}
@@ -260,16 +264,6 @@ export function ExportView({ api, t }: ExportViewProps) {
         </div>
       )}
 
-      {/* 设备相关分区警告 */}
-      {customWarnings.length > 0 && (
-        <Banner kind="warn">
-          {t('export.selectionWarnings')}
-          <ul className={css.warnList}>
-            {customWarnings.map((w, i) => <li key={i}>{w}</li>)}
-          </ul>
-        </Banner>
-      )}
-
       {/* 3. 选项行：加密 / 导出密钥（联动规则保持） */}
       <div className={css.optionsRow}>
         <Checkbox
@@ -331,22 +325,34 @@ export function ExportView({ api, t }: ExportViewProps) {
         </label>
       </div>
 
-      {/* P2-⑫：导出前预览结果（零写入） */}
-      {preview !== null && !preview.loading && (
-        <Banner kind={preview.error !== null ? 'error' : 'info'}>
-          {preview.error !== null
-            ? preview.error
-            : preview.result !== null && (
-              <span>
+      {/* 需求 6：导出前预览弹窗（零写入；loading / 合计 / 分区构成 / 错误都在弹窗内呈现） */}
+      <Modal
+        open={previewOpen}
+        onClose={() => { setPreviewOpen(false) }}
+        title={t('export.preview')}
+        wide
+      >
+        <Modal.Header
+          title={t('export.preview')}
+          onClose={() => { setPreviewOpen(false) }}
+        />
+        <Modal.Body scroll>
+          {preview?.loading === true && <Spinner label={t('export.previewing')} />}
+          {preview !== null && preview.error !== null && <Banner kind="error">{preview.error}</Banner>}
+          {preview !== null && !preview.loading && preview.result !== null && (
+            <>
+              <div className={css.hint}>
                 {t('export.previewSummary', {
                   sections: String(preview.result.totalSections),
                   size: formatBytes(preview.result.totalSizeBytes),
                 })}
                 {preview.result.sectionsFailed > 0 && ` · ${t('export.previewSkipped', { count: String(preview.result.sectionsFailed) })}`}
-              </span>
-            )}
-        </Banner>
-      )}
+              </div>
+              <SectionComposition sections={preview.result.sections} t={t} />
+            </>
+          )}
+        </Modal.Body>
+      </Modal>
 
       {running && <ProgressBar event={progress} active />}
 

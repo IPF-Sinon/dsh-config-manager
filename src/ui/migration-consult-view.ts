@@ -48,6 +48,65 @@ export interface ConsultView {
   };
 }
 
+/* ---------------- 建议依据（reasons）去重与分组 ---------------- */
+
+/** 建议依据分组条目（去重后的 message + 在原始数组中的出现次数） */
+export interface ConsultReasonGroup {
+  message: string;
+  /** 该 message 在原始 reasons 数组中的出现次数（≥1；仅用于 UI 展示「×N」） */
+  count: number;
+}
+
+/**
+ * 「建议依据」去重（纯函数）。
+ *
+ * 背景：core 的 `recommendationReasons` 是各维度 error/warning issue message 的
+ * 直接拼接，同一句话可能被 push 多次（如 migratability 维度按 `m.warnings` 逐条 push
+ * 「存在需注意的迁移项」），同一句也可能既出现在维度 issue 又出现在 reasons 中。
+ *
+ * 去重规则（严格按此实现，勿擅自放宽）：
+ *  1. **按原文去重**：只有完全相同的字符串才算重复——不做 trim 后合并、不做大小写
+ *     折叠、不做前缀/子串归并。因此 `'A'`、`' A'`、`'A '` 是三个不同条目。
+ *  2. **保持首次出现顺序**：稳定去重，输出顺序 = 各条目在输入中首次出现的顺序。
+ *  3. **丢弃空串与纯空白字符串**（`trim() === ''`），它们不参与展示。
+ *
+ * 不修改入参，返回新数组。
+ */
+export function dedupeConsultReasons(reasons: string[]): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const reason of reasons) {
+    if (reason.trim() === '') continue; // 空串/纯空白：直接丢弃
+    if (seen.has(reason)) continue; // 原文去重：仅完全相同才视为重复
+    seen.add(reason);
+    out.push(reason);
+  }
+  return out;
+}
+
+/**
+ * 「建议依据」分组（纯函数）：去重后给出每个条目的重复次数，供 UI 渲染「×N」。
+ *
+ * 规则：
+ *  1. 先经 `dedupeConsultReasons` 去重（原文去重、丢弃空串/纯空白、保持首现顺序）；
+ *  2. `count` = 该 message 在**原始数组**（未去重）中的出现次数，按原文精确匹配统计，
+ *     因此 count ≥ 1；count 仅用于展示「×N」，不代表任何业务优先级或权重；
+ *  3. 输出顺序 = 去重后的顺序（即各条目首次出现的顺序）。
+ *
+ * 不修改入参，返回新数组。
+ */
+export function consultReasonGroups(reasons: string[]): ConsultReasonGroup[] {
+  const counts = new Map<string, number>();
+  for (const reason of reasons) {
+    counts.set(reason, (counts.get(reason) ?? 0) + 1);
+  }
+  return dedupeConsultReasons(reasons).map((message) => ({
+    message,
+    // 去重结果必来自入参，故此处理论上不会取到兜底值
+    count: counts.get(message) ?? 0,
+  }));
+}
+
 /** verdict → Badge kind（语义映射） */
 export function consultVerdictBadgeKind(v: HealthVerdict): ConsultBadgeKind {
   switch (v) {

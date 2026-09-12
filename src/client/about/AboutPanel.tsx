@@ -119,7 +119,7 @@ export function AboutPanel({ api, t }: AboutPanelProps) {
           <Button href={ABOUT_LINKS.issuesUrl}>{t('about.issues')}</Button>
           <Button onClick={() => setReleaseNotesOpen(true)}>{t('about.releaseNotes')}</Button>
         </div>
-        <div className={css.statRow}>
+        <div className={css.authorRow}>
           <span className={css.groupLabel}>{t('about.authorLabel')}</span>
           <a
             className={css.aboutAuthor}

@@ -9,6 +9,34 @@ This file records release highlights of dsh-config-manager (bilingual: 中文 + 
 > **Release workflow**: on tag push, CI extracts the current version's section as the release notes highlights;
 > the build fails fast if the section is missing, so you cannot forget to update it.
 
+## [v0.1.58] - 2026-09-12
+
+> 本版为自驱的 UI 打磨与缺陷修复轮次，**不针对任何新提交的 issue**（#27-#30 的修复随 v0.1.57 发布）。
+
+### 🎯 亮点 / Highlights (zh)
+
+- 🧭 **历史页「分类筛选」首次真正生效**：此前后端查询契约（`filterToQuery`）已实现、单测全绿，但历史面板从未把筛选条件传给后端（`list()` 不带参），于是「分类 / 结果」下拉**可点却纹丝不动**——纯函数已写、组件从未接线的空接线缺陷。现改为前端收敛（`filterByKindResult`）：下拉只列出**当前数据里真实出现过**的分类与结果（全部 14 类中多数在本机永远不会出现，列出来只会让人选中"永远为空"的选项），并强制保留当前选中项，避免「选中了却在下拉里找不到」；统计徽章与分组随之反映筛选结果
+- 📊 **同步历史改用设计系统数据表 + 顶部统计摘要**：该表此前用字符串 class `sync-history-table`（全仓唯一字面量，且**无任何 CSS 规则**，等同于裸表格）。现改用 `.dataTable/.tableFixed/.tableCompact`（限高内滚 + 固定列宽），并在表头新增统计摘要徽章行（总数 / 快照 / 自动同步 / 失败 / 跳过，**失败与跳过仅在存在时出现**并给语义色）；快照 UUID 中段省略、保留头尾区分信息（悬停仍给全文），时间列等宽 11px 单行显示、悬停给出**含秒**的完整本地时间；自动同步的跳过原因独立成第二行小字，状态徽章带语义色
+- 🧹 **「建议依据」去重**：迁移前咨询卡的建议依据是各维度问题文案的直接拼接，同一句可能被重复 push 多次（如「存在需注意的迁移项」按迁移项逐条 push）。现按**原文**去重并保持首次出现顺序，重复项以「×N」标注，空串与纯空白条目丢弃（刻意不做 trim 合并、不做大小写折叠，避免把不同内容误并）
+- 📄 **长配置明细不再横向溢出**：导入冲突的「配置更改明细」原用 `<pre>`（`white-space: pre` 不换行），长 JSON 会把卡片撑出左右滚动条。现拆成 `current` / `imported` 两段各自独占一行、中间以 1px 分割线区隔，长值任意位置折行
+- 🪟 **导出预览改为弹窗 + 分区构成共用组件**：预览结果由行内横幅改为宽弹窗（加载 / 合计 / 分区构成 / 错误都在弹窗内呈现，点击立即打开不再等待），并与总览页共用新的 `SectionComposition` 分区构成网格，两处视觉与文案完全一致
+- 📋 **备份计划卡信息分层**：改为「头部（标题 / 结果徽章 / 动作）→ 事实行（开关状态 / 备份间隔 / 上次运行）→ 说明 → 设置行」。事实行统一取**宿主权威值**，未保存的草稿不再改写它，避免把尚未生效的档位显示成已生效；关闭定时备份时隐藏间隔与时刻下拉，减少无关噪音
+- 📐 **布局回归修复（含暗色主题下的突兀色块）**：`.input/.select` 移除全局 `width:100%`（市场筛选、同步快照下拉等**行内**控件曾被撑成各自独占一整行），满宽只在纵向字段内按需生效；`.shellNav` 不再铺底色（暗色下其底色比宿主设置面板底色更暗，会形成一条通栏色块）；弹窗尺寸放大以容纳长内容；新增 `.actionRowTop/.tabRow/.headRow/.authorRow` 行原语，把「行」的语义与间距集中到 CSS，不再各处内联 margin；市场筛选改为 2 列网格
+- 🐛 **修复备份页选中行高亮丢失**：快照列表行原本带 `data-selected` 提供选中淡底，随本轮重构被误删，导致 listbox 选中态**只剩语义（`aria-selected`）没有视觉反馈**。已恢复
+
+### Highlights (en)
+
+> This release is a self-driven UI polish and defect-fix round and **does not address any newly filed issue** (the #27-#30 fixes shipped in v0.1.57).
+
+- 🧭 **History category filtering works for the first time**: the backend query contract (`filterToQuery`) was implemented and fully unit-tested, but the history panel never passed the filter to the backend (`list()` took no arguments), so the kind / result dropdowns **could be changed without affecting the list at all** — a pure function written and tested, yet never wired up. Filtering is now applied on the client (`filterByKindResult`); the dropdowns list only the kinds and results that **actually occur in the current data** (most of the 14 kinds never occur on a given machine, and offering them only lets you pick an option that is always empty), the current selection is always kept in the list, and the summary badges and grouping follow the filtered set
+- 📊 **Sync history now uses the design-system data table, with a header summary**: the table previously used the string class `sync-history-table` (the only such literal in the repo, and it had **no CSS rules at all** — effectively a bare table). It now uses `.dataTable/.tableFixed/.tableCompact` (height-capped inner scroll with fixed column widths), and gains a summary badge row in the header (total / snapshots / auto sync / failed / skipped, where **failed and skipped appear only when non-zero** and carry semantic colours); snapshot UUIDs are middle-ellipsized so the distinguishing tail survives (the full value stays in the tooltip), timestamps render as a single line of 11px monospace with the **second-precision** local time on hover, and the auto-sync skip reason moves to its own second line with a colour-coded status badge
+- 🧹 **"Reasons" de-duplication**: the pre-migration consult card builds its reasons by concatenating dimension issue messages, so the same sentence could be pushed repeatedly (e.g. "there are migration items to review", pushed once per item). Reasons are now de-duplicated **literally**, keeping first-appearance order, with repeats labelled "×N" and empty or whitespace-only entries dropped (deliberately no trim-merging and no case folding, which would merge genuinely different content)
+- 📄 **Long conflict details no longer overflow horizontally**: the import conflict "configuration change detail" used a `<pre>` (`white-space: pre`, no wrapping), so a long JSON blob forced a horizontal scrollbar. It is now split into `current` and `imported` lines separated by a 1px rule, wrapping anywhere
+- 🪟 **Export preview is now a dialog, sharing the section-composition component**: the preview moved from an inline banner to a wide dialog (loading / totals / section breakdown / errors all render inside it, opening immediately instead of waiting), and it now shares the new `SectionComposition` grid with the overview page so both render identically
+- 📋 **Backup schedule card re-layered**: header (title / result badge / actions) → fact rows (enabled state / interval / last run) → notes → settings. The fact rows always read the **host-authoritative** values, so unsaved drafts no longer rewrite them (previously an unsaved interval could appear to be in effect); interval and time dropdowns are hidden while scheduled backup is off
+- 📐 **Layout regression fixes (including a dark-theme colour block)**: `.input/.select` no longer default to `width: 100%` (inline controls such as the market filters and the sync snapshot picker were each being stretched onto their own full-width row) — full width now applies only inside vertical field containers; `.shellNav` no longer paints a background (in dark themes its colour is *darker* than the host settings panel, producing a full-width slab); dialogs were enlarged for long content; new row primitives `.actionRowTop/.tabRow/.headRow/.authorRow` centralise row semantics and spacing in CSS instead of scattered inline margins; the market filters became a two-column grid
+- 🐛 **Fixed the lost selected-row highlight on the backup page**: snapshot rows carried `data-selected` for their selected tint, which was dropped during this refactor, leaving the listbox selection with **semantics (`aria-selected`) but no visual feedback**. Restored
+
 ## [v0.1.57] - 2026-09-11
 
 ### 🎯 亮点 / Highlights (zh)

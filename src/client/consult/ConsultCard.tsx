@@ -6,7 +6,7 @@
  * 复用公共原语：Card / Badge / Banner / SectionTitle；维度明细限高内滚。
  */
 import type { ConsultReport } from '../../core/migration-consult.ts'
-import { consultView } from '../../ui/migration-consult-view.ts'
+import { consultReasonGroups, consultView } from '../../ui/migration-consult-view.ts'
 import type { UiT } from '../../ui/i18n.ts'
 import { Badge, Banner, Card, SectionTitle } from '../common/ui.tsx'
 import { redact } from '../../security/redaction.ts'
@@ -22,6 +22,9 @@ export interface ConsultCardProps {
 /** 迁移前咨询卡：健康评分 + 维度明细 + 建议 + 触发项 */
 export function ConsultCard({ report, t, title }: ConsultCardProps) {
   const view = consultView(report, t)
+  // 建议依据：core 的 reasons 是各维度 issue message 的拼接，存在重复；
+  // 去重后逐条展示，重复条目以「×N」标注（count 由 consultReasonGroups 统计）
+  const reasonGroups = consultReasonGroups(view.reasons)
   return (
     <Card className={css.card}>
       <SectionTitle title={title ?? t('consult.title')} />
@@ -33,49 +36,60 @@ export function ConsultCard({ report, t, title }: ConsultCardProps) {
         <Badge kind="info">{t('consult.dryRun')}</Badge>
       </div>
 
-      {/* 建议触发项 */}
-      {view.reasons.length > 0 && (
+      {/* 建议触发项：去重后每条一行（不再依赖 Banner 的 flex 换行） */}
+      {reasonGroups.length > 0 && (
         <Banner kind={view.verdictBadgeKind === 'error' ? 'error' : view.verdictBadgeKind === 'warn' ? 'warn' : 'info'}>
           <div className={css.groupLabel}>{t('consult.reasons')}</div>
-          {view.reasons.map((r, i) => <div key={i}>{redact(r)}</div>)}
+          <div className={css.reasonList}>
+            {reasonGroups.map((g) => (
+              <div key={g.message} className={css.reasonLine}>
+                <span>{redact(g.message)}</span>
+                {g.count > 1 && <Badge kind="info">{`×${g.count}`}</Badge>}
+              </div>
+            ))}
+          </div>
         </Banner>
       )}
 
       {/* 将应用摘要 */}
-      <div className={css.groupLabel}>{t('consult.willApply')}</div>
-      <div className={css.statRow}>
-        {view.willApply.sections.length > 0 && (
-          <Badge kind="info">{t('consult.sections', { count: String(view.willApply.sections.length) })}</Badge>
-        )}
-        {view.willApply.itemCount > 0 && (
-          <Badge kind="info">{t('consult.items', { count: String(view.willApply.itemCount) })}</Badge>
-        )}
-        {view.willApply.conflicts > 0 && (
-          <Badge kind="warn">{t('consult.conflicts', { count: String(view.willApply.conflicts) })}</Badge>
-        )}
-        {view.willApply.risks > 0 && (
-          <Badge kind="warn">{t('consult.risks', { count: String(view.willApply.risks) })}</Badge>
-        )}
+      <div className={css.consultSection}>
+        <div className={css.groupLabel}>{t('consult.willApply')}</div>
+        <div className={css.statRow}>
+          {view.willApply.sections.length > 0 && (
+            <Badge kind="info">{t('consult.sections', { count: String(view.willApply.sections.length) })}</Badge>
+          )}
+          {view.willApply.itemCount > 0 && (
+            <Badge kind="info">{t('consult.items', { count: String(view.willApply.itemCount) })}</Badge>
+          )}
+          {view.willApply.conflicts > 0 && (
+            <Badge kind="warn">{t('consult.conflicts', { count: String(view.willApply.conflicts) })}</Badge>
+          )}
+          {view.willApply.risks > 0 && (
+            <Badge kind="warn">{t('consult.risks', { count: String(view.willApply.risks) })}</Badge>
+          )}
+        </div>
       </div>
 
       {/* 维度明细（限高内滚） */}
-      <div className={css.groupLabel}>{t('consult.dimensions')}</div>
-      <div className={css.consultScroll}>
-        {view.dimensions.map((d) => (
-          <div key={d.id} className={css.consultDimension}>
-            <div className={css.statRow}>
-              <Badge kind={d.badgeKind}>{d.label}</Badge>
-              <Badge kind="info">{d.score}</Badge>
+      <div className={css.consultSection}>
+        <div className={css.groupLabel}>{t('consult.dimensions')}</div>
+        <div className={css.consultScroll}>
+          {view.dimensions.map((d) => (
+            <div key={d.id} className={css.consultDimension}>
+              <div className={css.statRow}>
+                <Badge kind={d.badgeKind}>{d.label}</Badge>
+                <Badge kind="info">{d.score}</Badge>
+              </div>
+              {d.issues.length > 0 && (
+                <ul className={css.reportList}>
+                  {d.issues.map((issue, i) => (
+                    <li key={i}>{redact(issue.message)}</li>
+                  ))}
+                </ul>
+              )}
             </div>
-            {d.issues.length > 0 && (
-              <ul className={css.reportList}>
-                {d.issues.map((issue, i) => (
-                  <li key={i}>{redact(issue.message)}</li>
-                ))}
-              </ul>
-            )}
-          </div>
-        ))}
+          ))}
+        </div>
       </div>
     </Card>
   )

@@ -966,11 +966,10 @@ export function MyConfigsView({
   const renderList = (): ReactNode => {
     return (
       <Card>
-        <div className={css.actionRow}>
+        <div className={css.headRow}>
           <span className={css.groupLabel}>{t('myconfigs.list.title')}</span>
-          <Button disabled={listLoading} onClick={() => { void loadItems() }}>
-            {listLoading ? <Spinner label={t('myconfigs.list.loading')} /> : t('myconfigs.list.refresh')}
-          </Button>
+          {/* 撑开剩余空间：Badge 与刷新按钮成组贴右，刷新按钮为该行最右元素 */}
+          <span className={css.statusSpacer} />
           {myItems !== null && (
             <Badge kind="info">
               {t('myconfigs.list.summary', {
@@ -981,6 +980,9 @@ export function MyConfigsView({
               })}
             </Badge>
           )}
+          <Button disabled={listLoading} onClick={() => { void loadItems() }}>
+            {listLoading ? <Spinner label={t('myconfigs.list.loading')} /> : t('myconfigs.list.refresh')}
+          </Button>
         </div>
         {myItemsError !== null && <Banner kind="error">{redact(myItemsError)}</Banner>}
         {listLoading && myItems === null && <div className={css.statRow}><Spinner label={t('myconfigs.list.loading')} /></div>}
@@ -1137,8 +1139,10 @@ export function MyConfigsView({
         <>
           {/* 一键上传入口：点按钮 → 免责（首次）→ 弹窗向导 */}
           <Card>
-            <div className={css.actionRow}>
+            <div className={css.headRow}>
               <span className={css.groupLabel}>{t('myconfigs.upload.title')}</span>
+              {/* 撑开剩余空间，「一键上传」按钮贴右 */}
+              <span className={css.statusSpacer} />
               <Button variant="primary" onClick={openUpload}>{t('myconfigs.upload.run')}</Button>
             </div>
             <span className={css.hint}>{t('myconfigs.upload.selectHint')}</span>

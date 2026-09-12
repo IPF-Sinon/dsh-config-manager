@@ -13,8 +13,8 @@ import { Badge, Card, SectionTitle, Spinner } from '../common/ui.tsx'
 import { ErrorBanner } from '../common/ErrorBanner.tsx'
 import type { SyncApi, SyncHistoryEntry, AutosyncHistoryEntry } from './sync-api.ts'
 import {
-  describeSkipReason, directionLabel, formatDateTime, projectAutosyncEntry,
-  projectSyncHistoryEntries,
+  formatDateTime, formatDateTimeFull, midEllipsis, projectAutosyncEntry,
+  projectSyncHistoryEntries, summarizeSyncHistory,
 } from './history-model.ts'
 import type { SnapshotHistoryEntry } from './history-model.ts'
 import type { TranslateNS } from '../client-types.ts'
@@ -62,6 +62,7 @@ export function SyncHistoryView(props: SyncHistoryViewProps): ReactNode {
   }, [api, reloadKey]);
 
   const rows = useMemo(() => projectSyncHistoryEntries(entries), [entries]);
+  const stats = useMemo(() => summarizeSyncHistory(rows), [rows]);
   // 快照类条目（兼容旧投影；仅统计展示）
   const snapshotRows = useMemo<SnapshotHistoryEntry[]>(
     () => rows
@@ -98,30 +99,58 @@ export function SyncHistoryView(props: SyncHistoryViewProps): ReactNode {
   return (
     <Card>
       <SectionTitle title={`${t('history.title')}（${rows.length}）`} />
-      <table className="sync-history-table">
-        <thead>
-          <tr><th>{t('history.colTime')}</th><th>{t('history.colKind')}</th><th>{t('history.colDetail')}</th></tr>
-        </thead>
-        <tbody>
-          {rows.map((r) => {
-            if (r.kind === 'autosync' && r.autosync !== undefined) {
-              return <AutosyncRow key={r.id} entry={r.autosync} t={t} />;
-            }
-            const snap = snapshotRows.find((s) => s.id === r.id);
-            return (
-              <tr key={r.id}>
-                <td>{formatDateTime(r.createdAt)}</td>
-                <td><Badge kind="info">{t('history.kindSnapshot')}</Badge></td>
-                <td>
-                  <ChannelBadge transport={r.transport} t={t} />
-                  <code>{r.id}</code>
-                  {snap !== undefined && <> · {snap.sectionCount} {t('history.sectionCount')}</>}
-                </td>
+      {/* F：头部统计摘要（先扫结论）；失败/跳过仅在存在时出现，并给语义色 */}
+      <div className={css.statRow} aria-label={t('history.stats.summary')}>
+        <Badge kind="info">{t('history.stats.total', { count: String(stats.total) })}</Badge>
+        <Badge kind="info">{t('history.stats.snapshots', { count: String(stats.snapshots) })}</Badge>
+        <Badge kind="info">{t('history.stats.autosync', { count: String(stats.autosync) })}</Badge>
+        {stats.failed > 0 && <Badge kind="error">{t('history.stats.failed', { count: String(stats.failed) })}</Badge>}
+        {stats.skipped > 0 && <Badge kind="warn">{t('history.stats.skipped', { count: String(stats.skipped) })}</Badge>}
+      </div>
+      {/* A：改用设计系统数据表（.tableWrap > .tableScroll 限高内滚 + .dataTable/.tableFixed/.tableCompact） */}
+      <div className={css.tableWrap}>
+        <div className={css.tableScroll}>
+          <table className={`${css.dataTable} ${css.tableFixed} ${css.tableCompact}`}>
+            <thead>
+              <tr>
+                {/* 时间列 116px（非 92px）：11px 等宽下 "YYYY-MM-DD HH:mm" 实测 96.8px，
+                    加 .tableCompact 的左右各 8px padding 需 112.8px；92px 会把时间截成
+                    「2026-09-01…」（浏览器实测截图确认），反而比改前更不可读。 */}
+                <th style={{ width: 116 }}>{t('history.colTime')}</th>
+                <th style={{ width: 96 }}>{t('history.colKind')}</th>
+                <th>{t('history.colDetail')}</th>
               </tr>
-            );
-          })}
-        </tbody>
-      </table>
+            </thead>
+            <tbody>
+              {rows.map((r) => {
+                if (r.kind === 'autosync' && r.autosync !== undefined) {
+                  return <AutosyncRow key={r.id} entry={r.autosync} t={t} />;
+                }
+                const snap = snapshotRows.find((s) => s.id === r.id);
+                return (
+                  <tr key={r.id}>
+                    {/* B：等宽 11px + 固定列宽 → 单行不换行；title 给完整本地时间（含秒） */}
+                    <td className={css.dim} title={formatDateTimeFull(r.createdAt)}>
+                      <span className={`${css.mono}`} style={{ fontSize: '11px' }}>{formatDateTime(r.createdAt)}</span>
+                    </td>
+                    <td><Badge kind="info">{t('history.kindSnapshot')}</Badge></td>
+                    <td>
+                      <div className={css.cellMain}>
+                        {/* C：UUID 中段省略（保留头尾，尾部才是区分信息），title 保留全文 */}
+                        <span className={`${css.cellTitle} ${css.mono}`} title={r.id}>{midEllipsis(r.id)}</span>
+                        <span className={css.cellMeta}>
+                          <ChannelBadge transport={r.transport} t={t} />
+                          {snap !== undefined && <>{snap.sectionCount} {t('history.sectionCount')}</>}
+                        </span>
+                      </div>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      </div>
     </Card>
   );
 }
@@ -137,14 +166,27 @@ function AutosyncRow({ entry, t }: AutosyncRowProps): ReactNode {
   const row = projectAutosyncEntry(entry);
   return (
     <tr>
-      <td>{formatDateTime(row.createdAt)}</td>
-      <td><Badge kind="info">{t('history.kindAutosync')}</Badge></td>
+      {/* B：与快照行一致的时间呈现（等宽 11px 单行 + title 完整本地时间） */}
+      <td className={css.dim} title={formatDateTimeFull(row.createdAt)}>
+        <span className={`${css.mono}`} style={{ fontSize: '11px' }}>{formatDateTime(row.createdAt)}</span>
+      </td>
+      {/* D：类型徽章按实况给语义色（success=ok / failed=error / skipped、partial=warn） */}
+      <td><Badge kind={row.badgeKind}>{t('history.kindAutosync')}</Badge></td>
       <td>
-        <div>
-          <ChannelBadge transport={entry.transport} t={t} />
-          {row.summary}
-          {entry.pushedSnapshotId !== undefined && <> · {t('history.autosyncPush')} {entry.pushedSnapshotId}</>}
-          {entry.pulledSnapshotId !== undefined && <> · {t('history.autosyncPull')} {entry.pulledSnapshotId}</>}
+        <div className={css.cellMain}>
+          {/* E：主行「方向 + 状态」徽章（原摘要串里的跳过原因下沉到第二行小字） */}
+          <span className={css.cellTitle}>
+            <ChannelBadge transport={entry.transport} t={t} />
+            {' '}
+            <Badge kind="info">{row.direction}</Badge>
+            {' '}
+            <Badge kind={row.badgeKind}>{row.status}</Badge>
+            {entry.pushedSnapshotId !== undefined && <>{' · '}{t('history.autosyncPush')} <span className={css.mono} title={entry.pushedSnapshotId}>{midEllipsis(entry.pushedSnapshotId)}</span></>}
+            {entry.pulledSnapshotId !== undefined && <>{' · '}{t('history.autosyncPull')} <span className={css.mono} title={entry.pulledSnapshotId}>{midEllipsis(entry.pulledSnapshotId)}</span></>}
+          </span>
+          {/* E：第二行小字——跳过原因 / 错误（信息保留，但不再挤在主行里） */}
+          {row.skipReasonText !== undefined && <span className={css.hint}>{row.skipReasonText}</span>}
+          {row.error !== undefined && <span className={css.hint} title={row.error}>{t('history.autosyncError', { error: '' })}{row.error}</span>}
         </div>
         {row.hasDetail && (
           <details>

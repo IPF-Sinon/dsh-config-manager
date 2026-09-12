@@ -946,7 +946,7 @@ export function SyncSettingsView({ api, t }: SyncSettingsViewProps) {
                 </div>
               )}
             </div>
-            <div className={css.actionRow}>
+            <div className={css.actionRowTop}>
               <Button variant="primary" onClick={openChannelDialog}>
                 {t('channel.open')}
               </Button>
@@ -1176,7 +1176,7 @@ export function SyncSettingsView({ api, t }: SyncSettingsViewProps) {
           <Card>
             <span className={css.groupLabel}>{t('mode.title')}</span>
             <span className={css.hint}>{t('mode.hint')}</span>
-            <div className={css.modeTabs} role="tablist">
+            <div className={css.tabRow} role="tablist">
               <button
                 type="button"
                 role="tab"
@@ -1334,9 +1334,23 @@ export function SyncSettingsView({ api, t }: SyncSettingsViewProps) {
             </Button>
           </div>
 
-          {/* 选择历史快照下拉（当前通道远端快照，支持点击/展开即刷新与主动刷新按钮） */}
-          <div className={css.statRow} style={{ alignItems: 'flex-end', gap: '8px' }}>
-            <label className={css.field} style={{ flex: 1, minWidth: '200px' }}>
+          {/* 选择历史快照下拉（当前通道远端快照，支持点击/展开即刷新与主动刷新按钮）
+              —— 下拉与刷新按钮强制同一行：容器 nowrap + label 可收缩（minWidth:0），
+              按钮包 flex:none 的 pickerAction 保宽度，窄画布下不再换行。
+              行距归属：空态 hint 存在时由它承担底部 10px，不存在时由本行承担，
+              保证与下一张卡片的间距在任何状态下都不丢 */}
+          <div
+            className={css.snapshotPickerRow}
+            style={{ marginBottom: chState.snapshots.length === 0 && !chState.loadingSnapshots ? 0 : 10 }}
+          >
+            {/* 同基线依赖两点，缺一仍差 10px（实测）：
+                ① 空态 hint 移出本 label（见下方独立一行），否则 label 高 = fieldLabel
+                   + select + hint，按钮底部对齐到含 hint 的 label 底；
+                ② 清掉 label 自带的 margin:0 0 10px —— 容器是 align-items:flex-end，
+                   按 margin box 对齐，该 margin 会把按钮再压低 10px。
+                两点均由 CSS 承担：label 的归零见 styles 里 `.snapshotPickerRow .field`，
+                本行底部 10px 间距由 `.snapshotPickerHint` 或下方容器的条件 marginBottom 提供。 */}
+            <label className={css.field} style={{ flex: '1 1 auto', minWidth: 0 }}>
               <span className={css.fieldLabel}>{t('syncflow.selectSnapshot')}</span>
               <select
                 className={css.select}
@@ -1358,22 +1372,27 @@ export function SyncSettingsView({ api, t }: SyncSettingsViewProps) {
                   </option>
                 ))}
               </select>
-              {chState.snapshots.length === 0 && !chState.loadingSnapshots && (
-                <span className={css.hint}>{t('syncflow.noSnapshots')}</span>
-              )}
             </label>
-            <Button
-              disabled={state.busy !== null || chState.loadingSnapshots || !remoteReady}
-              onClick={() => { void loadSnapshots(undefined, undefined, true) }}
-              title={t('syncflow.refreshSnapshots')}
-            >
-              {chState.loadingSnapshots ? (
-                <Spinner label={t('syncflow.refreshingSnapshots')} />
-              ) : (
-                <><RefreshIcon size={14} /> {t('syncflow.refreshSnapshots')}</>
-              )}
-            </Button>
+            <span className={css.pickerAction}>
+              <Button
+                disabled={state.busy !== null || chState.loadingSnapshots || !remoteReady}
+                onClick={() => { void loadSnapshots(undefined, undefined, true) }}
+                title={t('syncflow.refreshSnapshots')}
+              >
+                {chState.loadingSnapshots ? (
+                  <Spinner label={t('syncflow.refreshingSnapshots')} />
+                ) : (
+                  <><RefreshIcon size={14} /> {t('syncflow.refreshSnapshots')}</>
+                )}
+              </Button>
+            </span>
           </div>
+          {/* 空态提示独立成行（移出 label）：label 高度 = fieldLabel + select，
+              刷新按钮与之底部对齐即真正同一行，不再被 hint 顶高错位。
+              底部 10px 间距由本行承担，故上方容器的 marginBottom 归零 */}
+          {chState.snapshots.length === 0 && !chState.loadingSnapshots && (
+            <div className={`${css.hint} ${css.snapshotPickerHint}`}>{t('syncflow.noSnapshots')}</div>
+          )}
 
           {/* R-20：原 `{state.error !== null && <ErrorBanner error={state.error} />}` 已移除 ——
               该字段承载 10+ 个动作的失败、渲染在全部卡片之后（用户触发点常在其上方视野外），

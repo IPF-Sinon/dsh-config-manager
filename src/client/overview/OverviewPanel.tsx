@@ -37,6 +37,7 @@ import {
   type OverviewMetricKey,
 } from '../../ui/overview-view.ts'
 import { Badge, Button, Card, Spinner, StatusDot } from '../common/ui.tsx'
+import { SectionComposition } from '../common/SectionComposition.tsx'
 import { BackupIcon, ExportIcon, ImportIcon, SyncIcon, ArrowRightIcon, CopyIcon } from '../common/Icon.tsx'
 import css from '../config-manager.module.css'
 
@@ -431,15 +432,7 @@ export function OverviewPanel({ api, syncApi, historyApi, t, openActivity }: Ove
                   {data.sections.sectionsFailed > 0 && ` · ${t('export.previewSkipped', { count: String(data.sections.sectionsFailed) })}`}
                 </span>
               </div>
-              <div className={css.sectionGrid}>
-                {data.sections.sections.map((s) => (
-                  <div key={s.section} className={css.sectionRow}>
-                    <span className={css.sectionName}>{s.section}</span>
-                    <span className={css.sectionCount}>{t('overview.sections.entries', { count: String(s.count) })}</span>
-                    <span className={`${css.sectionSize} ${css.mono}`}>{formatBytes(s.sizeBytes)}</span>
-                  </div>
-                ))}
-              </div>
+              <SectionComposition sections={data.sections.sections} t={t} />
             </Card>
           )}
 

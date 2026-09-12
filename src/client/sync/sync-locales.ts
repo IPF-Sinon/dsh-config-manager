@@ -196,6 +196,13 @@ export const zh = {
   // 触发通道（同步历史「由哪个通道触发」）
   'history.channelGit': 'GitHub',
   'history.channelWebdav': 'WebDAV',
+  // 列表头部统计摘要（需求 4F）
+  'history.stats.total': '共 {count} 条',
+  'history.stats.snapshots': '快照 {count}',
+  'history.stats.autosync': '自动同步 {count}',
+  'history.stats.failed': '失败 {count}',
+  'history.stats.skipped': '跳过 {count}',
+  'history.stats.summary': '同步历史统计',
   // —— Toast 操作回执（R-20：按动作分文案） ——
   // 原先 10+ 个动作的失败共用同一个 state.error；机械替换成 Toast 后，同 kind+text
   // 会被 store 的去重逻辑合并（互相顶掉），故此处为每个动作单独给出可区分文案。
@@ -402,6 +409,13 @@ export const en: Record<keyof typeof zh, string> = {
   // Trigger channel (which channel triggered this history entry)
   'history.channelGit': 'GitHub',
   'history.channelWebdav': 'WebDAV',
+  // List header stats summary (requirement 4F)
+  'history.stats.total': '{count} total',
+  'history.stats.snapshots': '{count} snapshots',
+  'history.stats.autosync': '{count} auto sync',
+  'history.stats.failed': '{count} failed',
+  'history.stats.skipped': '{count} skipped',
+  'history.stats.summary': 'Sync history statistics',
   // Toast receipts (R-20: per-action wording; identical kind+text would be de-duplicated)
   'toast.autosyncLoadFailed': 'Failed to load auto-sync status',
   'toast.configSaveFailed': 'Failed to save channel config',
