@@ -26,12 +26,22 @@ export abstract class FileCollectionAdapter implements ConfigAdapter<FilesSectio
   /** 相对 homeDir 的基准目录（与 core/backup.ts FILE_BASES 一致） */
   abstract readonly baseDir: string;
 
-  async export(ctx: HostContext, _options: ExportOptions): Promise<ExportSection<FilesSection>> {
+  /**
+   * 文件列表的筛选钩子：默认原样返回（skills / agentPresets / agentInstructions /
+   * pluginFiles / self 这些分区不筛）。需要按数量挑子集的子类覆写它 —— 目前只有
+   * sessions 这么做（「只要最近几个会话」是真机上最常见的诉求）。
+   */
+  protected selectRels(_ctx: HostContext, rels: string[], _options: ExportOptions): string[] {
+    return rels;
+  }
+
+  async export(ctx: HostContext, options: ExportOptions): Promise<ExportSection<FilesSection>> {
     const files: FilesSection['files'] = [];
     const warnings: string[] = [];
     let rels: string[] = [];
     try {
       rels = await ctx.fs.listRecursive(this.baseDir);
+      rels = this.selectRels(ctx, rels, options);
     } catch {
       // 目录不存在视为空
     }

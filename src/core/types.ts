@@ -23,6 +23,11 @@ export interface ExportOptions {
   outPath?: string;
   /** 导出备注（P0-④：host 写入 exports/.backup-notes.json，随 self 分区迁移；非敏感） */
   note?: string;
+  /**
+   * 会话子集筛选（只影响 sessions 分区）。缺省 = 今天的行为：该分区一旦被选中就**全带**。
+   * limit：0 = 不带、负数 = 全带、正数 = 最新 N 个（按该会话最新一份日志的 mtime 排序）。
+   */
+  sessions?: { limit: number };
 }
 
 /** adapter.export() 的产出：数据 + 文件 + 报告计数 + 告警 */
