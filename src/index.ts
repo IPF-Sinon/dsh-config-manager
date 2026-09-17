@@ -2047,6 +2047,16 @@ function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSync
         // Encryption password is in-memory only (never persisted / logged).
         // 加密是独立选项：只要提供了密码就注入 EncryptionProvider
         // （includeSecrets=false 时备份仍标记加密，但 secrets.enc 内容为空）。
+        // 会话子集筛选（可选）：只影响 sessions 分区。缺省/不合法 = 今天的行为（选中就全带）。
+        const sessionsRaw = body['sessions']
+        const sessionsLimit =
+          sessionsRaw !== null && typeof sessionsRaw === 'object' && !Array.isArray(sessionsRaw)
+            ? (sessionsRaw as Record<string, unknown>)['limit']
+            : undefined
+        const sessions =
+          typeof sessionsLimit === 'number' && Number.isFinite(sessionsLimit)
+            ? { limit: Math.trunc(sessionsLimit) }
+            : undefined
         const password = typeof body['password'] === 'string' && body['password'] !== '' ? body['password'] : undefined
         // 同名去重（用户决策 2026-08-25）：自定义文件名若已存在，自动追加数字
         // （foo.zip → foo-1.zip → foo-2.zip）而非覆盖已有备份；自动命名自带随机
@@ -2102,7 +2112,7 @@ function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSync
             },
           })
           const result = await withTimeout(
-            exporter.export({ includeSecrets, only, outPath: plainZipPath }),
+            exporter.export({ includeSecrets, only, outPath: plainZipPath, ...(sessions === undefined ? {} : { sessions }) }),
             ROUTE_TIMEOUT_MS,
             msg('host.exportTimeout'),
           )
