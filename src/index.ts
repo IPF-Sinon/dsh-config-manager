@@ -59,6 +59,7 @@ import * as yaml from 'js-yaml'
 import { Exporter, FileSnapshotStore, Importer, verifySnapshot } from './core/index.ts'
 import { ProfileManager, isValidProfileName } from './profiles/index.ts'
 import { cleanupCaches } from './core/cache-cleaner.ts'
+import { collectCredentialRefs } from './core/credentials-file.ts'
 import { deleteSnapshot, isValidSnapshotId, listSnapshots, planRestore, setSnapshotPinned, validateSnapshotForRestore, type RestorePlan, type RestoreReport, type RestoreSnapshotVerdict } from './core/restore.ts'
 import { rollback as performRollback } from './core/rollback.ts'
 import { recomputeRecoveryDecision, executeRecovery } from './core/reconcile.ts'
@@ -989,13 +990,9 @@ async function tryDecryptCredentials(
   } catch {
     return undefined
   }
-  const map = new Map<string, string>()
-  if (parsed !== null && typeof parsed === 'object') {
-    for (const [k, v] of Object.entries(parsed as Record<string, unknown>)) {
-      if (typeof v === 'string' && v !== '') map.set(k, v)
-    }
-  }
-  return map
+  // 凭据值在 .credentials.yaml 里挂在顶层 refs: 下面（见 credentials-file.ts）：
+  // 只看顶层字符串项会把整段跳过 → 「包里带着原文，却照样提示需人工重填」。
+  return collectCredentialRefs(parsed)
 }
 
 /** 解密错误 → 用户可读文本：BAD_PASSWORD 只报「密码错误」（不泄内部细节），其余原文 */

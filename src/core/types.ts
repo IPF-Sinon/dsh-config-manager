@@ -272,6 +272,13 @@ export interface ImportResult {
   executed: ExecutedItem[];
   needsRestart: boolean;
   missingSecrets: string[];
+  /**
+   * 本次导入从备份包内（security/secrets.enc）解出并回填的凭据条数。
+   *
+   * 有它宿主才能区分「凭据已经恢复了」与「凭据确实还缺、需要人工重填」——
+   * 之前只能靠 missingSecrets 反推，而整文件 vault 回填的警告又会把两件事混在一起。
+   */
+  credentialsRestored?: number;
   warnings: string[];
   rollback: RollbackReport | null;
   snapshotId: string | null;

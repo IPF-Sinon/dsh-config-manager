@@ -9,6 +9,21 @@ This file records release highlights of dsh-config-manager (bilingual: 中文 + 
 > **Release workflow**: on tag push, CI extracts the current version's section as the release notes highlights;
 > the build fails fast if the section is missing, so you cannot forget to update it.
 
+
+## 0.1.60
+
+- **修复：备份里的凭据原文没被用上。** 容器的 `.credentials.yaml` 把凭据放在顶层 `refs:` 块里，
+  而收集逻辑只看顶层字符串项（`Object.entries` + `typeof v === 'string'`）→ `refs` 是对象被整段
+  跳过。结果：备份包带着凭据原文、导入时也解开了，却照样提示「需人工重填」。现在顶层字符串项与
+  `refs:` 块下的键值都收（`src/core/credentials-file.ts`），`records` 之类嵌套仍然忽略。
+- **修复：vault 警告误导。** 「凭据文件 .credentials.yaml 不在本机 vault（跨机恢复需人工重填）」
+  说的是导出时在同机留的镜像，跨机必然缺；但只要包内 `security/secrets.enc` 已经把值解出来
+  回填了，就不该再喊重填。现在只有**确实还缺**凭据时才报重填，已恢复的报一条说明。
+- **新增：导入结果带 `credentialsRestored`**（从包内解出并回填的凭据条数）。
+- **修复：工作区目录不存在时只留一条警告。** 工作区路径常是「来源机器上才有的目录」
+  （如 `/root/workspace/456`），写记录时 realpath 失败 → 非致命警告 → 宿主按 `workspace.json`
+  归组会话时「找不到对应工作区」。现在 `workspaces` adapter 写记录前会把缺失目录建出来
+  （只处理容器内绝对路径、拒绝 `..`、已存在不动、建不出来退回原来的警告）。
 ## [v0.1.59] - 2026-09-13
 
 > 本版把两个**尚未发布**的版本合并为一次发布，因此只占一个版本号。它包含前后两轮工作：前半是**自驱的能力补齐轮次**，方向来自对同类工具（restic / kopia / Borg / rclone / Duplicati / Syncthing / chezmoi / yadm / mackup / VS Code / JetBrains）的能力对照与差距分析，落点选在「会真正丢东西」与「可靠性无法自证」两类问题上；后半是**格式规格化 + 全量缺陷修复**轮次，方向是把 bundle 格式从「实现细节」变成**可被第三方独立实现的对外契约**，并在此过程中把审计挖出的缺陷**真正修掉**（而非仅登记）。两轮均不针对任何新提交的 issue。

@@ -717,6 +717,8 @@ export class Analyzer {
     const missingSecrets = plan.missingSecrets
       .filter((s) => !importCtx.decryptedCredentials?.has(s.ref) && !importCtx.secretInputs[s.ref])
       .map((s) => s.ref);
+    // 从备份包内解出来（或宿主补录）的凭据条数：宿主用它区分「已经恢复」与「确实还缺」。
+    const credentialsRestored = plan.missingSecrets.length - missingSecrets.length;
 
     // M1：导入成功 → 快照标记 done（元数据写失败只告警，不改变导入结论）
     await this.markSnapshotStatus(snapshot.id, 'done');
@@ -728,7 +730,16 @@ export class Analyzer {
       const vaultDataDir = path.join(this.ctx.homeDir, 'dsh-config-manager');
       const vault = await restoreVaultFiles(this.ctx.fs, vaultDataDir, this.ctx.homeDir, DEFAULT_SENSITIVE_RELS);
       for (const rel of vault.restored) warnings.push(this.msg('import.vaultRestored', { rel }));
-      for (const rel of vault.missing) warnings.push(this.msg('import.vaultMissing', { rel }));
+      for (const rel of vault.missing) {
+        // 「整文件 vault 缺失」与「凭据值缺不缺」是两件事：vault 是导出时在同机留的镜像，
+        // 跨机必然没有；但只要包内的 security/secrets.enc 已经把值解出来回填了，就不该
+        // 再喊「需人工重填」——那会让人以为凭据丢了。
+        if (missingSecrets.length > 0) {
+          warnings.push(this.msg('import.vaultMissing', { rel }));
+        } else if (credentialsRestored > 0) {
+          warnings.push(this.msg('import.vaultSkippedCredentialsRestored', { rel, count: credentialsRestored }));
+        }
+      }
       for (const s of vault.skipped) {
         // targetExists = 目标已有更新的凭据，属预期跳过，不打扰用户
         if (s.reason !== 'targetExists') warnings.push(this.msg('import.vaultBackfillFailed', { rel: s.rel, reason: s.reason }));
@@ -742,6 +753,7 @@ export class Analyzer {
       executed,
       needsRestart,
       missingSecrets,
+      credentialsRestored,
       warnings,
       rollback: null,
       snapshotId: snapshot.id,

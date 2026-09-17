@@ -80,3 +80,11 @@ jobs:
         # 或 lib/ 产物已坏——在 PR 阶段暴露，而不是等到发版时才卡住。
         # npm pack --pack-destination 在目录不存在时报 ENOENT（fresh checkout）。
         run: mkdir -p dist && npm pack --pack-destination ./dist
+      - name: Upload tarball
+        # 把 npm pack 的产物交出来：装到真机验证要的就是这个 tgz。
+        # （本地构建太重：开发机只剩 ~670MB 可用，tsc + 1558 项测试会 OOM。）
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: dsh-config-manager-tgz
+          path: dist/*.tgz
+          if-no-files-found: error

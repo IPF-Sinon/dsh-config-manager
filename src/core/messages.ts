@@ -60,6 +60,7 @@ export const zh = {
   'import.userSkippedDetail': '插件 {name} 已由用户跳过，未安装',
   'import.vaultRestored': '凭据文件 {rel} 已从本机 vault 回填',
   'import.vaultMissing': '凭据文件 {rel} 不在本机 vault（跨机恢复需人工重填）',
+  'import.vaultSkippedCredentialsRestored': '凭据文件 {rel} 不在本机 vault，但本次导入已从备份包内解出凭据并回填 {count} 条，无需重填',
   'import.vaultBackfillFailed': 'vault 凭据回填失败（不影响导入结果）: {reason}',
 
   // ---------- 回滚 ----------
@@ -217,6 +218,7 @@ export const zh = {
   'adapter.mcpMissing': '导入数据缺少 MCP server {serverName}',
   'adapter.mcpWritten': 'MCP server {serverName} 已写入 patch，重启后生效',
   'adapter.workspaceWriteFailed': '工作区 {ref} 未能写入：{msg}（需映射路径或先在目标创建目录）',
+  'adapter.workspaceDirCreated': '工作区目录 {path} 在目标端不存在，已自动创建（不建这一步会话会归不进对应工作区）',
   'adapter.providerMissing': '导入数据缺少 provider {route}',
   'adapter.namespaceMissing': '导入数据缺少 namespace {ref}',
 
@@ -354,6 +356,7 @@ export const en: Record<keyof typeof zh, string> = {
   'import.userSkippedDetail': 'Plugin {name} was skipped by the user and not installed',
   'import.vaultRestored': 'Credential file {rel} backfilled from the local vault',
   'import.vaultMissing': 'Credential file {rel} is not in the local vault (cross-machine restore: re-enter manually)',
+  'import.vaultSkippedCredentialsRestored': 'Credential file {rel} is not in the local vault, but this import restored {count} credential(s) from the archive, so nothing needs re-entering',
   'import.vaultBackfillFailed': 'Vault credential backfill failed (import result unaffected): {reason}',
 
   // ---------- rollback ----------
@@ -511,6 +514,7 @@ export const en: Record<keyof typeof zh, string> = {
   'adapter.mcpMissing': 'Import data is missing MCP server {serverName}',
   'adapter.mcpWritten': 'MCP server {serverName} written to the patch; takes effect after restart',
   'adapter.workspaceWriteFailed': 'Workspace {ref} could not be written: {msg} (map the path or create the target directory first)',
+  'adapter.workspaceDirCreated': 'Workspace directory {path} did not exist on this machine and was created (without it, sessions cannot join their workspace)',
   'adapter.providerMissing': 'Import data is missing provider {route}',
   'adapter.namespaceMissing': 'Import data is missing namespace {ref}',
 
