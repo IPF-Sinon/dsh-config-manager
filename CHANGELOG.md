@@ -10,6 +10,16 @@ This file records release highlights of dsh-config-manager (bilingual: 中文 + 
 > the build fails fast if the section is missing, so you cannot forget to update it.
 
 
+
+## 0.1.61
+
+- **新增：会话子集筛选（`src/core/session-select.ts`）。** 此前 `/export` 只能「整棵会话树全带」
+  或「一个都不带」——`only` 选的是分区，不能按数量筛会话，而「只要最近几个会话」恰恰是
+  真机上最常见的诉求。现在把宿主侧已经过真机验证的挑选规则搬进核心：
+  单位是**会话目录**（同一会话的新旧两份日志必须一起走，否则恢复出来缺一半历史）、
+  文件名判据不写死（`session.lock` 之类不算会话，新格式 `session.v3.jsonl.zstd` 不能漏）、
+  按该会话最新一份日志的 mtime 倒序排序；数量档位 0=不带 / 负数=全带 / 正数=最新 N 个。
+  本版先落核心模块与测试，路由接线见后续版本。
 ## 0.1.60
 
 - **修复：备份里的凭据原文没被用上。** 容器的 `.credentials.yaml` 把凭据放在顶层 `refs:` 块里，
