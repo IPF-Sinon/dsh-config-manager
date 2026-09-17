@@ -39,7 +39,9 @@ test('单位是会话目录：同一会话的新旧两份日志一起带走', ()
     mkSession(root, 'proj-a', 'sess-1', ['session.jsonl.zstd', 'session.v3.jsonl.zstd'], 1);
     const picked = pickSessions(root, 5);
     assert.equal(picked.length, 1);
-    assert.equal(picked[0].files.length, 2);
+    const first = picked[0];
+    assert.ok(first); // 收窄类型（noUncheckedIndexedAccess 下不能直接索引取值）
+    assert.equal(first.files.length, 2);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
