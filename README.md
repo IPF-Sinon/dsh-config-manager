@@ -1,12 +1,12 @@
 # dist — 供真机测试的构建产物
 
-这是 `dsh-config-manager` 0.1.60 的测试构建（源在分支 `fix/credentials-refs-and-workspace-dirs`）。
-**不发 npm**（同名包属于上游作者），只用 jsDelivr/CDN 或本地文件装到设备上验证。
+`dsh-config-manager` 的测试构建（**不发 npm**：同名包属于上游作者；源在分支 `fix/credentials-refs-and-workspace-dirs` 与 `feat/session-partition`）。
+放在这里是为了让容器能从 CDN 下载（GitHub release 直连在国内常被拦）。
 
-安装：
+安装（App 终端里）：
 
 ```bash
-dsh plugin --profile web add https://cdn.jsdelivr.net/gh/IPF-Sinon/dsh-config-manager@pkg-0.1.60-test.1/dsh-config-manager-0.1.60.tgz
+dsh plugin --profile web add https://cdn.jsdelivr.net/gh/IPF-Sinon/dsh-config-manager@pkg-0.1.62-test.1/dsh-config-manager-0.1.62.tgz
 ```
 
 回滚：
@@ -15,4 +15,4 @@ dsh plugin --profile web add https://cdn.jsdelivr.net/gh/IPF-Sinon/dsh-config-ma
 dsh plugin --profile web add dsh-config-manager@0.1.59
 ```
 
-sha256：见同目录 `dsh-config-manager-0.1.60.tgz.sha256`。
+sha256 见同目录 `.sha256` 文件。
