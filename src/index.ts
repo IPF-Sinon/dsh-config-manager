@@ -36,7 +36,7 @@
 
 import { randomBytes } from 'node:crypto'
 import { execFile } from 'node:child_process'
-import { createReadStream, createWriteStream, mkdirSync, readFileSync } from 'node:fs'
+import { createReadStream, createWriteStream, mkdirSync, readFileSync, realpathSync } from 'node:fs'
 import fs from 'node:fs/promises'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path'
@@ -60,6 +60,11 @@ import { Exporter, FileSnapshotStore, Importer, verifySnapshot } from './core/in
 import { ProfileManager, isValidProfileName } from './profiles/index.ts'
 import { cleanupCaches } from './core/cache-cleaner.ts'
 import { collectCredentialRefs } from './core/credentials-file.ts'
+import { isSessionFile } from './core/session-select.ts'
+import { readHeaderLine } from './core/session-files.ts'
+import { planGrouping } from './core/session-group-plan.ts'
+import { applyGroupingPlan } from './core/session-group-apply.ts'
+import { hasPendingMutation, parseRegistry, validateRegistry } from './core/session-registry.ts'
 import { deleteSnapshot, isValidSnapshotId, listSnapshots, planRestore, setSnapshotPinned, validateSnapshotForRestore, type RestorePlan, type RestoreReport, type RestoreSnapshotVerdict } from './core/restore.ts'
 import { rollback as performRollback } from './core/rollback.ts'
 import { recomputeRecoveryDecision, executeRecovery } from './core/reconcile.ts'
@@ -256,6 +261,8 @@ const API = {
   // m-backup-files：导出产物管理（列出 exports/*.zip + 删除；下载复用 /download）
   backupFiles: '/api/dsh-config-manager/backup-files',
   backupFilesDelete: '/api/dsh-config-manager/backup-files/delete',
+  // 会话归组（把刚恢复进来的会话放回它该在的工作区）
+  sessionsGroup: '/api/dsh-config-manager/sessions/group',
   // Phase 7：迁移前咨询（只读健康评分 + 建议；POST，loopback fence）
   consult: '/api/dsh-config-manager/consult',
   // m-sync-ui：远程同步（Git 私有仓库通道）
@@ -1500,6 +1507,43 @@ async function readPluginDiagnostics(host: HostContext): Promise<Partial<PluginD
 }
 
 /** Build the /api/dsh-config-manager route family. */
+/** 会话归组的回滚：把原内容写回、删掉新建的目标、恢复注册表原文。失败只记日志，不再抛。 */
+async function rollbackGrouping(
+  host: HostLikeForRollback,
+  originals: Map<string, Uint8Array>,
+  written: string[],
+  registryRel: string,
+  registryText: string,
+  sessionsRoot: string,
+): Promise<void> {
+  for (const [rel, data] of originals) {
+    try {
+      await host.fs.writeFile(rel, data)
+    } catch {
+      /* 尽力而为：回滚失败不回抛，避免掩盖原始错误 */
+    }
+  }
+  for (const rel of written) {
+    if (originals.has(rel)) continue
+    try {
+      await host.fs.remove(rel)
+    } catch {
+      /* 同上 */
+    }
+  }
+  try {
+    await host.fs.writeFile(registryRel, Buffer.from(registryText, 'utf8'))
+  } catch {
+    /* 同上 */
+  }
+  void sessionsRoot
+}
+
+/** 回滚只需要 fs 门面。 */
+interface HostLikeForRollback {
+  fs: { readFile(rel: string): Promise<Uint8Array>; writeFile(rel: string, data: Uint8Array): Promise<void>; remove(rel: string): Promise<void> };
+}
+
 function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSyncScheduler; makeSyncEngine: (cfg: SyncConfig) => SyncEngine } {
   const { host, adapters, exportsDir, tmpDir, snapshotsDir, runs, syncDir, marketDir, dataDir, credentials, githubClientId, githubClientSecret, backupScheduler, history } = deps
   const roots = [exportsDir, tmpDir]
@@ -3020,6 +3064,213 @@ function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSync
           writeJson(res, 500, { error: error instanceof Error ? error.message : String(error) })
         }
       },
+    },
+    // ------------------------------------------------------ sessions-group
+    // 会话归组：把「刚恢复进来的会话」放回它该在的工作区。
+    //
+    // 为什么需要：dsh 的工作区分组只在注册表首次 bootstrap 时做一次（workspace 服务的
+    // Service.init），之后放进 sessions 树的会话永远不会被归组，界面里也没有「从未分组
+    // 移进工作区」的入口；而光把 id 塞进 sessionIds 也没用 —— 成员判定是
+    // host.sessionPath(id) === record.path，sessionPath 由会话 header 的 cwd 反推。
+    //
+    // 红线（一条都不许省）：
+    //  - 注册表读不出 / 校验不过 / 有进行中改动（pendingMutation）→ **一字不写**；
+    //  - 目标工作区的 projectKey 目录只**反查**（从既有会话的 rel 首段），查不到就报
+    //    ungrouped，绝不自己编目录名；
+    //  - 只动注册表的 sessionIds / updatedAt，其余键（archivedSessionIds 等）一个都不碰；
+    //  - 写盘后**读回自检**（注册表重校验 + 每个目标文件第 1 帧的 cwd 必须等于目标路径），
+    //    任一不过就用内存里的原内容回滚全部改动。
+    {
+      kind: 'exact',
+      path: API.sessionsGroup,
+      handler: withMutationGate('session-group', async (req, res) => {
+        if (!guard(req, res, 'POST')) return
+        try {
+          const body = await readJsonBody(req)
+          const opts = (body ?? {}) as Record<string, unknown>
+          const strOpt = (v: unknown, dflt: string): string => (typeof v === 'string' && v !== '' ? v : dflt)
+          const sessionsRoot = strOpt(opts['sessionsRoot'], 'sessions')
+          const registryRel = strOpt(opts['registry'], 'storages/workspace.json')
+          const apply = opts['apply'] === true
+          const onlyPaths = Array.isArray(opts['paths'])
+            ? new Set(opts['paths'].filter((x): x is string => typeof x === 'string'))
+            : undefined
+          const maps = new Map<string, string>()
+          const rawMap = opts['map']
+          if (rawMap !== null && typeof rawMap === 'object' && !Array.isArray(rawMap)) {
+            for (const [k, v] of Object.entries(rawMap as Record<string, unknown>)) {
+              if (typeof v === 'string' && v !== '') maps.set(k, v)
+            }
+          }
+          const relJoin = (dir: string, rel: string): string => join(dir, rel)
+
+          // ── 1) 注册表：读不出 / 红线不过 / 有进行中改动 → 一律不写
+          let registryText: string
+          try {
+            registryText = Buffer.from(await host.fs.readFile(registryRel)).toString('utf8')
+          } catch {
+            writeJson(res, 409, { ok: false, error: '注册表读不出来，拒绝写入（宁可不动，也不猜）' })
+            return
+          }
+          const parts = parseRegistry(registryText)
+          if (parts === null) {
+            writeJson(res, 409, { ok: false, error: '注册表结构不认识，拒绝写入' })
+            return
+          }
+          const problems = validateRegistry(parts)
+          if (problems.length > 0) {
+            writeJson(res, 409, { ok: false, error: '注册表自校验不过，拒绝写入', problems })
+            return
+          }
+          if (hasPendingMutation(parts)) {
+            writeJson(res, 409, { ok: false, error: '注册表有进行中的改动（pendingMutation），拒绝写入' })
+            return
+          }
+
+          // ── 2) 建会话索引（先索引才能反查 projectKey）：只认 header 里明确有 id/cwd 的
+          const rels = await host.fs.listRecursive(sessionsRoot).catch(() => [] as string[])
+          const index: { rel: string; id: string; cwd: string }[] = []
+          for (const rel of rels) {
+            const base = rel.slice(rel.lastIndexOf('/') + 1)
+            if (!isSessionFile(base)) continue
+            if (onlyPaths !== undefined && !onlyPaths.has(rel)) continue
+            let bytes: Uint8Array
+            try {
+              bytes = await host.fs.readFile(relJoin(sessionsRoot, rel))
+            } catch {
+              continue
+            }
+            const header = readHeaderLine(Buffer.from(bytes))
+            if (header === null) continue
+            let parsed: unknown
+            try {
+              parsed = JSON.parse(header.trimEnd())
+            } catch {
+              continue
+            }
+            if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) continue
+            const rec = parsed as Record<string, unknown>
+            const id = rec['id']
+            const cwd = rec['cwd']
+            if (typeof id !== 'string' || id === '' || typeof cwd !== 'string' || cwd === '') continue
+            index.push({ rel, id, cwd })
+          }
+
+          // ── 3) projectKey 反查（不猜）：从「cwd 规范化后等于该工作区 path」的既有会话取 rel 首段
+          const canonical = (p: string): string | null => {
+            try {
+              return realpathSync(p)
+            } catch {
+              return null
+            }
+          }
+          const projectKeyFor = (wsPath: string): string | null => {
+            for (const e of index) {
+              const seg = e.rel.split('/')
+              if (seg.length < 3) continue
+              if (canonical(e.cwd) === wsPath) return seg[0] ?? null
+            }
+            return null
+          }
+
+          const workspaces = Object.entries(parts.table).map(([id, rec]) => ({ id, path: String(rec.path) }))
+          const plan = planGrouping({
+            sessions: index.map((e) => ({ rel: e.rel, id: e.id, cwd: e.cwd })),
+            workspaces,
+            maps,
+            canonical,
+          })
+
+          if (!apply) {
+            writeJson(res, 200, { ok: true, dryRun: true, scanned: index.length, ...plan })
+            return
+          }
+
+          // ── 4) 应用：算出新注册表与文件动作（核心模块不碰磁盘）
+          const applied = applyGroupingPlan({
+            items: plan.items,
+            registry: { table: parts.table },
+            readSession: (rel) => {
+              try {
+                // readSession 需要同步返回：这里用 node 的同步读（同目录树，路径可控）
+                return readFileSync(join(host.homeDir, sessionsRoot, rel))
+              } catch {
+                return null
+              }
+            },
+            projectKeyFor,
+          })
+
+          // ── 5) 落盘（原内容留在内存里当回滚副本）
+          const originals = new Map<string, Uint8Array>()
+          const written: string[] = []
+          const targetOf = new Map<string, string>(plan.items.map((it): [string, string] => [it.rel, it.to]))
+          try {
+            for (const action of applied.actions) {
+              const srcRel = relJoin(sessionsRoot, action.from)
+              const dstRel = relJoin(sessionsRoot, action.to)
+              const current = await host.fs.readFile(srcRel)
+              originals.set(srcRel, current)
+              await host.fs.mkdir(dstRel.slice(0, dstRel.lastIndexOf('/')))
+              await host.fs.writeFile(dstRel, action.content ?? current)
+              written.push(dstRel)
+              if (action.removeFrom) await host.fs.remove(srcRel)
+            }
+            // 注册表：只把 sessionIds / updatedAt 写回原文档（其余键不动）
+            for (const [id, rec] of Object.entries(applied.registry.table)) {
+              const target = parts.table[id]
+              if (target === undefined) continue
+              target.sessionIds = rec.sessionIds ?? []
+              target.updatedAt = rec.updatedAt
+            }
+            await host.fs.writeFile(registryRel, Buffer.from(yaml.dump(parts.doc), 'utf8'))
+          } catch (error) {
+            await rollbackGrouping(host, originals, written, registryRel, registryText, sessionsRoot)
+            writeJson(res, 500, {
+              ok: false,
+              error: '写入失败，已回滚',
+              detail: error instanceof Error ? error.message : String(error),
+              report: applied.report,
+            })
+            return
+          }
+
+          // ── 6) 读回自检：注册表重校验 + 每个目标文件第 1 帧 cwd 必须等于目标路径
+          const verifyProblems: string[] = []
+          try {
+            const back = parseRegistry(Buffer.from(await host.fs.readFile(registryRel)).toString('utf8'))
+            if (back === null) verifyProblems.push('写回后的注册表解析不出来')
+            else verifyProblems.push(...validateRegistry(back))
+            for (const action of applied.actions) {
+              const expect = targetOf.get(action.from)
+              if (expect === undefined) continue
+              const bytes = Buffer.from(await host.fs.readFile(relJoin(sessionsRoot, action.to)))
+              const line = readHeaderLine(bytes)
+              if (line === null) {
+                verifyProblems.push("自检失败：" + action.to + " 的 header 读不出来")
+                continue
+              }
+              try {
+                const rec = JSON.parse(line.trimEnd()) as Record<string, unknown>
+                if (rec['cwd'] !== expect) verifyProblems.push("自检失败：" + action.to + " 的 cwd 未指向目标路径")
+              } catch {
+                verifyProblems.push("自检失败：" + action.to + " 的 header 不是合法 JSON")
+              }
+            }
+          } catch (error) {
+            verifyProblems.push(error instanceof Error ? error.message : String(error))
+          }
+          if (verifyProblems.length > 0) {
+            await rollbackGrouping(host, originals, written, registryRel, registryText, sessionsRoot)
+            writeJson(res, 500, { ok: false, error: '写回自检不过，已回滚', problems: verifyProblems, report: applied.report })
+            return
+          }
+
+          writeJson(res, 200, { ok: true, dryRun: false, scanned: index.length, ...applied.report })
+        } catch (error) {
+          writeJson(res, 500, { error: error instanceof Error ? error.message : String(error) })
+        }
+      }),
     },
     // ------------------------------------------------------ backup-files
     // 导出产物管理（m-backup-files）：列出 exports/*.zip（名称/大小/时间/来源，
