@@ -11,6 +11,30 @@ This file records release highlights of dsh-config-manager (bilingual: 中文 + 
 
 
 
+
+## 0.1.62
+
+**会话分区能力移植完成**（此前会话只能整棵全带或一个都不带，且恢复进来的会话永远显示未分组）。
+
+- **新增：`/export` 可按数量筛会话**（`sessions: { limit }`）。limit 缺省 = 今天行为（全带），
+  0 = 不带，负数 = 全带，正数 = 最新 N 个；单位是**会话目录**（同一会话的新旧日志一起走，
+  否则恢复出来缺一半历史），排序按该会话最新一份日志的 mtime；文件夹名判据不写死
+  （`session.lock` 之类不算会话，新格式 `session.v3.jsonl.zstd` 不会漏）。
+- **新增：`POST /sessions/group` 会话归组端到端可用**。入参 `apply`（缺省 false = dry run）、
+  `sessionsRoot`、`registry`、`paths`、`map`；目标是让恢复进来的会话真正回到工作区
+  （dsh 只在注册表首次 bootstrap 时归组一次，之后放进 sessions 树的会话不会归组，
+  而光把 id 塞进 sessionIds 也没用 —— 成员判定是 `host.sessionPath(id) === record.path`，
+  sessionPath 由 header 的 cwd 反推）。
+- **保守性（红线，全部落实）**：注册表读不出 / 结构不认识 / 自校验不过 / 有 `pendingMutation`
+  → 一字不写；projectKey 目录只**反查**既有会话的 rel 首段，查不到报 ungrouped，绝不自己编；
+  只动注册表的 `sessionIds` 与 `updatedAt`（`archivedSessionIds` 等未知键一个都不碰，因此
+  改的是解析后的文档而不是走 workspace 门面回填）；会话 header 用**多帧 zstd 的帧级替换**
+  （只看第 1 帧、后面批次字节原样接回），并做两重自证 —— 新第 1 帧必须是那一行、第 1 帧之后
+  所有帧解出的内容必须逐字节相同；写盘后**读回自检**（注册表重校验 + 每个目标文件第 1 帧的
+  cwd 必须等于目标路径），任一不过就按内存副本回滚全部改动与注册表原文。
+- 实现拆成五个可单测模块：`session-select`（子集筛选）、`session-files`（帧级改写+自证）、
+  `session-group-plan`（exact/mapped/inferred 选路，歧义不猜）、`session-group-apply`
+  （算注册表新状态与文件动作，不碰磁盘）、`session-registry`（解析 + 五条红线 + pendingMutation）。
 ## 0.1.61
 
 - **新增：会话子集筛选（`src/core/session-select.ts`）。** 此前 `/export` 只能「整棵会话树全带」
